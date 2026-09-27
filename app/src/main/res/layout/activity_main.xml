@@ -1,7 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="vertical" android:padding="24dp">
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:clipToPadding="false">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        android:paddingTop="24dp"
+        android:paddingEnd="24dp"
+        android:paddingBottom="40dp">
+
     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Vorlen Gateway Lab" android:textSize="28sp" android:textStyle="bold"/>
     <TextView android:id="@+id/status" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Ready — LAB BUILD" android:layout_marginTop="12dp"/>
     <EditText android:id="@+id/number" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="+44…" android:inputType="phone" android:layout_marginTop="24dp"/>
@@ -21,4 +33,6 @@
     <Button android:id="@+id/shellAudioSelfTest" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Test Shell VOICE_CALL Stream" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/audioSelfTest" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Run Call Audio Self-Test" android:layout_marginTop="8dp"/>
     <TextView android:id="@+id/audioState" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Audio engine: not tested" android:layout_marginTop="8dp"/>
-</LinearLayout>
+
+    </LinearLayout>
+</ScrollView>
