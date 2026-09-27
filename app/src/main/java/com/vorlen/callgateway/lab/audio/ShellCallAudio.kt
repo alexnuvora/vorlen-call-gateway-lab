@@ -25,6 +25,7 @@ object ShellCallAudio {
     private const val PORT = 28472
     private const val HELLO = 65
     private const val RECORD = 82
+    private const val UPLINK_TEST = 85
     private const val NONCE_BYTES = 16
     private const val MAC_BYTES = 32
     private val random = SecureRandom()
@@ -114,6 +115,19 @@ object ShellCallAudio {
         }
     }
 
+
+    suspend fun uplinkTest(context: Context): TestResult = withContext(Dispatchers.IO) {
+        runCatching {
+            // Restart to guarantee the bundled daemon is this build, not an older resident process.
+            if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
+            bootstrap(context).getOrThrow()
+            open(context, UPLINK_TEST.toByte()).use { socket ->
+                socket.soTimeout = 5000
+                val response = socket.getInputStream().bufferedReader().readLine() ?: "No response from shell daemon"
+                TestResult(response.startsWith("COMPLETE"), "SHELL UPLINK TEST — $response")
+            }
+        }.getOrElse { TestResult(false, "SHELL UPLINK TEST FAILED — " + (it.message ?: it.javaClass.simpleName)) }
+    }
 
     suspend fun audioDeviceSummary(context: Context): TestResult = withContext(Dispatchers.IO) {
         runCatching {
