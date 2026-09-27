@@ -27,3 +27,29 @@ dependencies {
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
     implementation("org.conscrypt:conscrypt-android:2.5.3")
 }
+
+
+val jemRecDir = rootProject.file("third_party/JemRec")
+val shellServerDir = File(jemRecDir, "shellserver")
+val shellServerJar = File(shellServerDir, "jemrec-capture.jar")
+
+val buildShellServer = tasks.register<Exec>("buildShellServer") {
+    description = "Build pinned JemRec shell-side cellular audio daemon"
+    workingDir = shellServerDir
+    environment("ANDROID_PLATFORM", "35")
+    environment("BUILD_TOOLS", "35.0.0")
+    environment("JEMREC_JDK_MAJOR", "17")
+    commandLine("./build.sh")
+    inputs.dir(File(shellServerDir, "src"))
+    inputs.file(File(shellServerDir, "build.sh"))
+    outputs.file(shellServerJar)
+}
+
+val copyShellServer = tasks.register<Copy>("copyShellServer") {
+    dependsOn(buildShellServer)
+    from(shellServerJar)
+    into(layout.projectDirectory.dir("src/main/assets"))
+    rename { "vorlen-call-capture.jar" }
+}
+
+tasks.named("preBuild") { dependsOn(copyShellServer) }
