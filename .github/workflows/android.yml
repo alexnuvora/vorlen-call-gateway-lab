@@ -19,7 +19,7 @@ jobs:
         run: |
           git clone https://github.com/jemcik/JemRec.git third_party/JemRec
           git -C third_party/JemRec checkout 25ad00e17e96de0cc3804dc575e543294fdb885e
-      - name: Preserve shell audio provenance
+      - name: Add Vorlen shell-side uplink experiment\n        run: python3 tools/patch_jemrec_uplink.py\n      - name: Preserve shell audio provenance
         run: |
           test -f third_party/JemRec/shellserver/LICENSE-scrcpy
           test -f LICENSE-JEMREC-APACHE-2.0
