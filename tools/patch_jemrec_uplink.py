@@ -6,7 +6,8 @@ s=s.replace("import android.media.AudioManager;","""import android.media.AudioMa
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
-import android.media.AudioTrack;""")
+import android.media.AudioTrack;
+import java.lang.reflect.Method;""")
 s=s.replace("private static final int COMMAND_RECORD = 'R';","""private static final int COMMAND_RECORD = 'R';
     // Vorlen lab only: bounded digital telephony uplink proof.
     private static final int COMMAND_UPLINK_TEST = 'U';""")
@@ -51,15 +52,33 @@ handler=r'''        if (command == COMMAND_UPLINK_TEST) {
                         .setSampleRate(rate)
                         .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                         .build();
-                AudioTrack track = new AudioTrack.Builder()
+
+                // The normal builder selects the primary voice-communication mixer and Samsung
+                // rejects it for Telephony Tx. Build the track with the policy's explicit
+                // AUDIO_OUTPUT_FLAG_INCALL_MUSIC (0x10000) from the shell process.
+                AudioTrack.Builder builder = new AudioTrack.Builder()
                         .setAudioAttributes(attrs)
                         .setAudioFormat(format)
                         .setBufferSizeInBytes(pcm.length * 2)
-                        .setTransferMode(AudioTrack.MODE_STATIC)
-                        .build();
+                        .setTransferMode(AudioTrack.MODE_STATIC);
+                Method flagMethod = null;
+                for (Method m : AudioTrack.Builder.class.getDeclaredMethods()) {
+                    if (m.getName().equals("setAudioTrackFlags") && m.getParameterTypes().length == 1
+                            && m.getParameterTypes()[0] == int.class) {
+                        flagMethod = m;
+                        break;
+                    }
+                }
+                if (flagMethod == null) {
+                    throw new IllegalStateException("shell AudioTrack.Builder has no setAudioTrackFlags(int)");
+                }
+                flagMethod.setAccessible(true);
+                flagMethod.invoke(builder, 0x10000);
+                AudioTrack track = builder.build();
                 try {
                     if (track.getState() != AudioTrack.STATE_INITIALIZED) {
-                        throw new IllegalStateException("AudioTrack not initialized");
+                        throw new IllegalStateException("INCALL_MUSIC AudioTrack not initialized; session="
+                                + track.getAudioSessionId() + " nativeRate=" + AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_VOICE_CALL));
                     }
                     boolean routed = track.setPreferredDevice(telephony);
                     if (!routed) {
