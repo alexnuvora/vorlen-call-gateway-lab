@@ -281,3 +281,4 @@ if anchor not in s: raise SystemExit("handler anchor not found")
 s=s.replace(anchor,handler+anchor,1)
 p.write_text(s)
 print("Patched JemRec shell daemon with Vorlen uplink command")
+
