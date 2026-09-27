@@ -27,7 +27,7 @@ object ShellCallAudio {
     private const val RECORD = 82
     private const val UPLINK_TEST = 85
     private const val UPLINK_PCM = 84
-    private const val DUPLEX = 68
+    private const val DUPLEX = 68\n    private const val CHATGPT_BRIDGE = 71
     private const val NONCE_BYTES = 16
     private const val MAC_BYTES = 32
     private val random = SecureRandom()
@@ -141,6 +141,22 @@ object ShellCallAudio {
             socket.soTimeout = 0
             UplinkStream(socket)
         }
+    }
+
+    suspend fun chatGptToCallBridge(context: Context): TestResult = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
+            // Restart so the resident shell daemon definitely contains this build's bridge command.
+            bootstrap(context).getOrThrow()
+            open(context, CHATGPT_BRIDGE.toByte()).use { socket ->
+                socket.soTimeout = 15_000
+                val reader = socket.getInputStream().bufferedReader()
+                val ready = reader.readLine() ?: error("No bridge response")
+                if (!ready.startsWith("READY")) return@use TestResult(false, "CHATGPT → CALL BRIDGE — " + ready)
+                val result = reader.readLine() ?: "No completion response"
+                TestResult(result.startsWith("COMPLETE"), "CHATGPT → CALL BRIDGE\n" + ready + "\n" + result)
+            }
+        }.getOrElse { TestResult(false, "CHATGPT → CALL BRIDGE FAILED — " + (it.message ?: it.javaClass.simpleName)) }
     }
 
     suspend fun uplinkSpeech(context: Context, pcm: ByteArray): TestResult = withContext(Dispatchers.IO) {
