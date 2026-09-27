@@ -27,7 +27,8 @@ object ShellCallAudio {
     private const val RECORD = 82
     private const val UPLINK_TEST = 85
     private const val UPLINK_PCM = 84
-    private const val DUPLEX = 68\n    private const val CHATGPT_BRIDGE = 71
+    private const val DUPLEX = 68
+    private const val CHATGPT_BRIDGE = 71
     private const val NONCE_BYTES = 16
     private const val MAC_BYTES = 32
     private val random = SecureRandom()
