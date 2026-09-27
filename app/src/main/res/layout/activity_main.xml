@@ -35,7 +35,20 @@
     <Button android:id="@+id/proofCallAudio" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Capture 10s Digital Call Proof" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/playCallProof" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Play Captured Call Proof" android:enabled="false" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/audioSelfTest" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Run Call Audio Self-Test" android:layout_marginTop="8dp"/>
-    <TextView android:id="@+id/audioState" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Audio engine: not tested" android:layout_marginTop="8dp"/>
+    <EditText
+        android:id="@+id/audioState"
+        android:layout_width="match_parent"
+        android:layout_height="240dp"
+        android:text="Audio engine: not tested"
+        android:layout_marginTop="8dp"
+        android:gravity="top|start"
+        android:inputType="textMultiLine|textNoSuggestions"
+        android:scrollbars="vertical"
+        android:overScrollMode="always"
+        android:selectAllOnFocus="false"
+        android:textIsSelectable="true"
+        android:singleLine="false"
+        android:padding="12dp"/>
 
     </LinearLayout>
 </ScrollView>
