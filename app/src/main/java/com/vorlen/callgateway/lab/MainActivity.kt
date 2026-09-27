@@ -177,15 +177,11 @@ class MainActivity : AppCompatActivity() {
                         val attrsBuilder = AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        val flag = runCatching {
-                            AudioAttributes::class.java.getDeclaredField("FLAG_INCALL_MUSIC").apply { isAccessible = true }.getInt(null)
-                        }.getOrElse {
-                            AudioAttributes::class.java.getDeclaredField("FLAG_CALL_REDIRECTION").apply { isAccessible = true }.getInt(null)
-                        }
-                        val setFlags = AudioAttributes.Builder::class.java.getDeclaredMethod("setFlags", Int::class.javaPrimitiveType)
-                        setFlags.isAccessible = true
-                        setFlags.invoke(attrsBuilder, flag)
-                        val track = AudioTrack.Builder()
+                        // AUDIO_OUTPUT_FLAG_INCALL_MUSIC is an AudioTrack output flag (0x10000),
+                        // not an AudioAttributes flag. Ask the hidden AudioTrack builder for it directly.
+                        val setAudioTrackFlags = AudioTrack.Builder::class.java.getDeclaredMethod("setAudioTrackFlags", Int::class.javaPrimitiveType)
+                        setAudioTrackFlags.isAccessible = true
+                        val trackBuilder = AudioTrack.Builder()
                             .setAudioAttributes(attrsBuilder.build())
                             .setAudioFormat(AudioFormat.Builder()
                                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -194,7 +190,8 @@ class MainActivity : AppCompatActivity() {
                                 .build())
                             .setBufferSizeInBytes(samples.size * 2)
                             .setTransferMode(AudioTrack.MODE_STATIC)
-                            .build()
+                        setAudioTrackFlags.invoke(trackBuilder, 0x10000)
+                        val track = trackBuilder.build()
                         try {
                             check(track.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack failed to initialize" }
                             track.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
