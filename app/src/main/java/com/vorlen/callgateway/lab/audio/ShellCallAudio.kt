@@ -114,6 +114,19 @@ object ShellCallAudio {
         }
     }
 
+
+    suspend fun audioDeviceSummary(context: Context): TestResult = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
+            val commands = listOf("id", "cat /proc/asound/cards", "cat /proc/asound/pcm")
+            val report = commands.joinToString("\n\n") { cmd ->
+                ">>> $cmd\n" + AdbTransport.exec(cmd).getOrElse { "Unavailable: " + it.message }
+            }
+            File(context.cacheDir, "vorlen_audio_summary.txt").writeText(report)
+            TestResult(true, "AUDIO ROUTE SUMMARY\n" + report.take(5000))
+        }.getOrElse { TestResult(false, "AUDIO ROUTE PROBE FAILED — " + it.message) }
+    }
+
     suspend fun proofCapture(context: Context, seconds: Int = 10): ProofResult = withContext(Dispatchers.IO) {
         runCatching {
             bootstrapRaw(context).getOrThrow()
