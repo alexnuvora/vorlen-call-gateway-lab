@@ -133,7 +133,7 @@ object ShellCallAudio {
     suspend fun openUplinkStream(context: Context): Result<UplinkStream> = withContext(Dispatchers.IO) {
         runCatching {
             if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
-            bootstrap(context).getOrThrow()
+            if (!ping()) bootstrapRaw(context).getOrThrow()
             val socket = open(context, DUPLEX.toByte())
             socket.soTimeout = 5000
             val ready = socket.getInputStream().bufferedReader().readLine() ?: error("No streaming uplink response")
@@ -189,6 +189,64 @@ object ShellCallAudio {
             File(context.cacheDir, "vorlen_audio_summary.txt").writeText(report)
             TestResult(true, "UPLINK ROUTE PROBE\n\n$report")
         }.getOrElse { TestResult(false, "AUDIO ROUTE PROBE FAILED — " + it.message) }
+    }
+
+    data class SpeechTurn(val pcmMono48k: ByteArray, val durationMs: Long, val rms: Double, val peak: Int)
+
+    suspend fun captureRemoteTurn(context: Context, maxSeconds: Int = 12): Result<SpeechTurn> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
+            if (!ping()) bootstrapRaw(context).getOrThrow()
+            open(context, RECORD.toByte()).use { socket ->
+                socket.soTimeout = 1500
+                val input = DataInputStream(socket.getInputStream().buffered())
+                val codecBytes = ByteArray(4).also(input::readFully)
+                val codec = codecBytes.toString(Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
+                check(codec.equals("raw", true)) { "Live turn capture requires raw daemon, got $codec" }
+                val speech = java.io.ByteArrayOutputStream()
+                var started = false
+                var quietMs = 0L
+                var speechMs = 0L
+                var sq = 0.0
+                var samples = 0L
+                var peak = 0
+                val deadline = System.currentTimeMillis() + maxSeconds * 1000L
+                while (System.currentTimeMillis() < deadline && (!started || quietMs < 750L)) {
+                    val pts = try { input.readLong() } catch (_: java.net.SocketTimeoutException) { continue }
+                    val len = input.readInt()
+                    require(len in 0..1_048_576)
+                    val data = ByteArray(len).also(input::readFully)
+                    if (pts and (1L shl 62) != 0L || len < 4) continue
+                    val frames = len / 4
+                    val mono = ByteArray(frames * 2)
+                    var energy = 0.0
+                    var chunkPeak = 0
+                    var p = 0
+                    for (i in 0 until frames) {
+                        val l = ((data[p].toInt() and 255) or (data[p+1].toInt() shl 8)).toShort().toInt()
+                        val r = ((data[p+2].toInt() and 255) or (data[p+3].toInt() shl 8)).toShort().toInt()
+                        // Remote side was proven present in the stereo VOICE_CALL stream. Use the louder
+                        // channel per frame so VAD remains robust across Samsung channel ordering.
+                        val v = if (kotlin.math.abs(l) >= kotlin.math.abs(r)) l else r
+                        mono[i*2] = (v and 255).toByte(); mono[i*2+1] = ((v shr 8) and 255).toByte()
+                        energy += v.toDouble() * v
+                        chunkPeak = maxOf(chunkPeak, kotlin.math.abs(v)); p += 4
+                    }
+                    val chunkRms = kotlin.math.sqrt(energy / frames.coerceAtLeast(1))
+                    val chunkMs = frames * 1000L / RAW_SAMPLE_RATE
+                    val active = chunkPeak > 500 && chunkRms > 30.0
+                    if (active) {
+                        started = true; quietMs = 0; speech.write(mono); speechMs += chunkMs
+                        sq += energy; samples += frames; peak = maxOf(peak, chunkPeak)
+                    } else if (started) {
+                        speech.write(mono); speechMs += chunkMs; quietMs += chunkMs
+                        sq += energy; samples += frames
+                    }
+                }
+                check(started && speech.size() > 0) { "No speech turn detected" }
+                SpeechTurn(speech.toByteArray(), speechMs, kotlin.math.sqrt(sq / samples.coerceAtLeast(1)), peak)
+            }
+        }
     }
 
     suspend fun proofCapture(context: Context, seconds: Int = 10): ProofResult = withContext(Dispatchers.IO) {
