@@ -14,6 +14,11 @@
     <TextView android:id="@+id/remoteState" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Remote gateway: not connected" android:layout_marginTop="12dp"/>
     <TextView android:id="@+id/callState" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Call state: idle" android:layout_marginTop="16dp"/>
     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Digital call audio experiment" android:textStyle="bold" android:layout_marginTop="20dp"/>
+    <EditText android:id="@+id/adbPairPort" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Wireless debugging pairing port" android:inputType="number" android:layout_marginTop="8dp"/>
+    <EditText android:id="@+id/adbPairCode" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="6-digit Wireless debugging pairing code" android:inputType="numberPassword" android:layout_marginTop="8dp"/>
+    <Button android:id="@+id/pairAdb" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Pair Wireless Debugging" android:layout_marginTop="8dp"/>
+    <Button android:id="@+id/startAudioDaemon" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Start Shell Audio Engine" android:layout_marginTop="8dp"/>
+    <Button android:id="@+id/shellAudioSelfTest" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Test Shell VOICE_CALL Stream" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/audioSelfTest" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Run Call Audio Self-Test" android:layout_marginTop="8dp"/>
     <TextView android:id="@+id/audioState" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Audio engine: not tested" android:layout_marginTop="8dp"/>
 </LinearLayout>
