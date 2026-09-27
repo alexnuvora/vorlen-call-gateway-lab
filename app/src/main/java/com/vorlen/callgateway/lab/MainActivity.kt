@@ -262,6 +262,27 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        findViewById<Button>(R.id.testAlexTurn).setOnClickListener {
+            if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) audioState.text = "ALEX TURN BLOCKED — no active cellular call"
+            else {
+                val token=prefs.getString("device_token",null)
+                if(token.isNullOrBlank()) audioState.text="ALEX TURN BLOCKED — pair the Vorlen gateway first"
+                else {
+                    audioState.text="ALEX LIVE — listening to the remote person digitally…"
+                    outboundIo.execute {
+                        try {
+                            val turn=runBlocking { ShellCallAudio.captureRemoteTurn(this@MainActivity,12).getOrThrow() }
+                            runOnUiThread { audioState.text="ALEX LIVE — speech detected; transcribing and thinking…" }
+                            val (heard,reply)=liveTurnRequest(token,turn.pcmMono48k)
+                            if(reply.isBlank()) throw IllegalStateException("No Alex response generated")
+                            runOnUiThread { audioState.text="HEARD: $heard\nALEX: $reply\nStreaming reply to Telephony Tx…" }
+                            speakAlexStreaming(reply){ err -> runOnUiThread { audioState.text=if(err==null) "ONE-TURN AI PASS\nHEARD: $heard\nALEX: $reply\nReply streamed digitally to Telephony Tx." else "ALEX UPLINK FAILED — $err" } }
+                        } catch(e:Throwable){ runOnUiThread { audioState.text="ALEX TURN FAILED — "+(e.message?:e.javaClass.simpleName) } }
+                    }
+                }
+            }
+        }
+
         findViewById<Button>(R.id.testLiveTurn).setOnClickListener {
             if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) audioState.text = "LIVE TURN BLOCKED — no active cellular call"
             else {
