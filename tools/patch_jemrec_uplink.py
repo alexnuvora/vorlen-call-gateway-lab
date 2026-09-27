@@ -95,6 +95,8 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                 int peak = 0, forwarded = 0;
                 long nonZeroSamples = 0;
                 int readCalls = 0, readErrors = 0;
+                int routeChecks = 0, routeLosses = 0, shortWrites = 0;
+                String firstTxRoute = "null", lastTxRoute = "null";
                 while (System.currentTimeMillis() < end) {
                     int n = record.read(stereo, 0, stereo.length, AudioRecord.READ_BLOCKING);
                     if (n <= 0) { readErrors++; continue; }
@@ -111,10 +113,26 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                         sumSq += (long)v*v; samples++;
                     }
                     int bytes=frames*2;
+                    // Feed Telephony Tx in ~20 ms PCM frames. Large ~100 ms writes can let
+                    // Samsung's in-call route accept the buffer but only transmit its first burst.
+                    final int txChunkBytes = 1920; // 48 kHz * 20 ms * mono * PCM16
                     int off=0;
                     while(off<bytes) {
-                        int w=track.write(mono,off,bytes-off,AudioTrack.WRITE_BLOCKING);
+                        AudioDeviceInfo liveRoute = track.getRoutedDevice();
+                        routeChecks++;
+                        if (liveRoute == null || liveRoute.getType() != AudioDeviceInfo.TYPE_TELEPHONY) {
+                            routeLosses++;
+                            if (!track.setPreferredDevice(telephony))
+                                throw new IllegalStateException("Telephony Tx route lost");
+                            liveRoute = track.getRoutedDevice();
+                        }
+                        String liveRouteName = liveRoute == null ? "null" : liveRoute.getType()+"/"+liveRoute.getId();
+                        if ("null".equals(firstTxRoute)) firstTxRoute = liveRouteName;
+                        lastTxRoute = liveRouteName;
+                        int want = Math.min(txChunkBytes, bytes-off);
+                        int w=track.write(mono,off,want,AudioTrack.WRITE_BLOCKING);
                         if(w<=0) throw new IllegalStateException("Telephony write "+w);
+                        if(w<want) shortWrites++;
                         off+=w;
                     }
                     forwarded += bytes;
@@ -133,6 +151,11 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                         " remoteSubmixRoute=" + remoteRoute +
                         " telephonyTxBytes=" + forwarded +
                         " telephonyTxRoute=" + txRoute +
+                        " telephonyTxFirstRoute=" + firstTxRoute +
+                        " telephonyTxLastRoute=" + lastTxRoute +
+                        " telephonyTxRouteChecks=" + routeChecks +
+                        " telephonyTxRouteLosses=" + routeLosses +
+                        " telephonyTxShortWrites=" + shortWrites +
                         " verdict=" + (peak > 8 && rms > 1.0 ? "CAPTURE_SIGNAL_PRESENT" : "CAPTURE_SILENT") + "\n")
                         .getBytes(StandardCharsets.UTF_8)); os.flush();
             } catch (Throwable t) {
