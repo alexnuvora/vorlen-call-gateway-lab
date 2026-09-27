@@ -118,7 +118,13 @@ object ShellCallAudio {
     suspend fun audioDeviceSummary(context: Context): TestResult = withContext(Dispatchers.IO) {
         runCatching {
             if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
-            val commands = listOf("id", "cat /proc/asound/cards", "cat /proc/asound/pcm")
+            val commands = listOf(
+                "id",
+                "dumpsys audio",
+                "dumpsys media.audio_flinger",
+                "dumpsys media.audio_policy",
+                "cmd media.audio_policy help 2>&1"
+            )
             val sections = mutableListOf<String>()
             for (cmd in commands) {
                 val output = AdbTransport.exec(cmd).getOrElse { "Unavailable: " + it.message }
