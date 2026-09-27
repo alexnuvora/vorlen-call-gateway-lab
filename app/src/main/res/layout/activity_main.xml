@@ -32,7 +32,7 @@
     <Button android:id="@+id/startAudioDaemon" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Start Shell Audio Engine" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/shellAudioSelfTest" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Test Shell VOICE_CALL Stream" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/probeAudioRoutes" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Probe Cellular Audio Routes" android:layout_marginTop="8dp"/>
-    <Button android:id="@+id/proofCallAudio" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Capture 10s Digital Call Proof" android:layout_marginTop="8dp"/>
+        <Button android:id="@+id/testIncallUplink" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Test 1s Digital Uplink Tone" android:layout_marginTop="8dp"/>\n<Button android:id="@+id/proofCallAudio" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Capture 10s Digital Call Proof" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/playCallProof" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Play Captured Call Proof" android:enabled="false" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/audioSelfTest" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Run Call Audio Self-Test" android:layout_marginTop="8dp"/>
     <EditText
