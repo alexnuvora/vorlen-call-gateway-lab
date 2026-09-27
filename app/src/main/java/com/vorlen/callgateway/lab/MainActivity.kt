@@ -147,6 +147,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        findViewById<Button>(R.id.probeAudioRoutes).setOnClickListener {
+            audioState.text = "Audio engine: reading cellular audio device routes…"
+            outboundIo.execute {
+                val result = runBlocking { ShellCallAudio.audioDeviceSummary(this@MainActivity) }
+                runOnUiThread { audioState.text = result.report }
+            }
+        }
+
         val playCallProof = findViewById<Button>(R.id.playCallProof)
         findViewById<Button>(R.id.proofCallAudio).setOnClickListener {
             audioState.text = "Audio engine: capturing 10 seconds of raw stereo VOICE_CALL audio… keep both people talking"
