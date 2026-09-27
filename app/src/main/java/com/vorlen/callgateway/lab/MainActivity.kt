@@ -164,6 +164,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        findViewById<Button>(R.id.probeChatGptVoice).setOnClickListener {
+            audioState.text = "Probing live ChatGPT Voice input/output routes… keep ChatGPT Voice actively speaking/listening"
+            outboundIo.execute {
+                val result = runBlocking { ShellCallAudio.chatGptVoiceProbe(this@MainActivity) }
+                runOnUiThread { audioState.text = result.report }
+            }
+        }
+
         findViewById<Button>(R.id.testIncallUplink).setOnClickListener {
             if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
                 audioState.text = "UPLINK TEST BLOCKED — no active cellular call"
