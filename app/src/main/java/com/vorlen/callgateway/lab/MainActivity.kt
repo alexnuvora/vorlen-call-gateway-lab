@@ -262,6 +262,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        findViewById<Button>(R.id.testLiveTurn).setOnClickListener {
+            if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) audioState.text = "LIVE TURN BLOCKED — no active cellular call"
+            else {
+                audioState.text = "LIVE TURN — listening digitally; remote person speak, then pause…"
+                outboundIo.execute {
+                    val result = runBlocking { ShellCallAudio.captureRemoteTurn(this@MainActivity, 12) }
+                    runOnUiThread { audioState.text = result.fold(
+                        onSuccess = { turn -> "LIVE TURN DETECTED — duration=" + turn.durationMs + "ms, bytes=" + turn.pcmMono48k.size + ", RMS=" + String.format("%.1f", turn.rms) + ", peak=" + turn.peak + "\nTurn ended after digital silence detection." },
+                        onFailure = { err -> "LIVE TURN FAILED — " + err.javaClass.simpleName + ": " + err.message }
+                    ) }
+                }
+            }
+        }
+
         val playCallProof = findViewById<Button>(R.id.playCallProof)
         findViewById<Button>(R.id.proofCallAudio).setOnClickListener {
             audioState.text = "Audio engine: capturing 10 seconds of raw stereo VOICE_CALL audio… keep both people talking"
