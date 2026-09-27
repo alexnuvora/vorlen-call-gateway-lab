@@ -21,6 +21,9 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import com.vorlen.callgateway.lab.adb.AdbTransport
+import com.vorlen.callgateway.lab.audio.ShellCallAudio
+import kotlinx.coroutines.runBlocking
 
 class MainActivity : AppCompatActivity() {
     private val requestCode = 100
@@ -85,7 +88,62 @@ class MainActivity : AppCompatActivity() {
             }
         }, PhoneStateListener.LISTEN_CALL_STATE)
 
+        val adbPairPort = findViewById<EditText>(R.id.adbPairPort)
+        val adbPairCode = findViewById<EditText>(R.id.adbPairCode)
         val audioState = findViewById<TextView>(R.id.audioState)
+        findViewById<Button>(R.id.pairAdb).setOnClickListener {
+            val port = adbPairPort.text.toString().toIntOrNull()
+            val code = adbPairCode.text.toString().trim()
+            if (port == null || code.length != 6) {
+                audioState.text = "Audio engine: enter the pairing port and 6-digit code shown by Android"
+            } else {
+                audioState.text = "Audio engine: pairing with this phone…"
+                outboundIo.execute {
+                    val result = runBlocking {
+                        AdbTransport.pair(this@MainActivity, AdbTransport.LOOPBACK, port, code)
+                            .fold(
+                                onSuccess = { AdbTransport.autoConnect(this@MainActivity, 6000) },
+                                onFailure = { Result.failure(it) },
+                            )
+                    }
+                    runOnUiThread {
+                        audioState.text = result.fold(
+                            onSuccess = { "Audio engine: Wireless Debugging paired and ADB connected" },
+                            onFailure = { "Audio engine: pairing/connect failed — ${it.message}" },
+                        )
+                    }
+                }
+            }
+        }
+
+        findViewById<Button>(R.id.startAudioDaemon).setOnClickListener {
+            audioState.text = "Audio engine: starting shell daemon…"
+            outboundIo.execute {
+                val result = runBlocking {
+                    if (!AdbTransport.isConnected) {
+                        AdbTransport.autoConnect(this@MainActivity, 6000).getOrElse {
+                            return@runBlocking Result.failure<Unit>(it)
+                        }
+                    }
+                    ShellCallAudio.bootstrap(this@MainActivity)
+                }
+                runOnUiThread {
+                    audioState.text = result.fold(
+                        onSuccess = { "Audio engine: shell daemon running and authenticated" },
+                        onFailure = { "Audio engine: daemon start failed — ${it.message}" },
+                    )
+                }
+            }
+        }
+
+        findViewById<Button>(R.id.shellAudioSelfTest).setOnClickListener {
+            audioState.text = "Audio engine: reading shell VOICE_CALL stream…"
+            outboundIo.execute {
+                val result = runBlocking { ShellCallAudio.selfTest(this@MainActivity) }
+                runOnUiThread { audioState.text = result.report }
+            }
+        }
+
         findViewById<Button>(R.id.audioSelfTest).setOnClickListener {
             audioState.text = "Audio engine: testing MIC and protected VOICE_CALL…"
             outboundIo.execute {
