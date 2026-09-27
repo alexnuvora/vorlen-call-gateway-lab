@@ -9,9 +9,60 @@ import android.media.AudioFormat;
 import android.media.AudioTrack;""")
 s=s.replace("private static final int COMMAND_RECORD = 'R';","""private static final int COMMAND_RECORD = 'R';
     // Vorlen lab only: bounded digital telephony uplink proof.
-    private static final int COMMAND_UPLINK_TEST = 'U';""")
+    private static final int COMMAND_UPLINK_TEST = 'U';
+    private static final int COMMAND_UPLINK_PCM = 'T';""")
 anchor="""        if (command == COMMAND_RECORD) {"""
-handler=r'''        if (command == COMMAND_UPLINK_TEST) {
+handler=r'''        if (command == COMMAND_UPLINK_PCM) {
+            OutputStream os = client.getOutputStream();
+            try {
+                Context context = FakeContext.get();
+                AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+                if (am.getMode() != AudioManager.MODE_IN_CALL) {
+                    os.write("BLOCKED not in call\n".getBytes(StandardCharsets.UTF_8)); os.flush(); return;
+                }
+                AudioDeviceInfo telephony = null;
+                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                    if (d.getType() == AudioDeviceInfo.TYPE_TELEPHONY) { telephony = d; break; }
+                }
+                if (telephony == null) {
+                    os.write("NO_TELEPHONY_TX\n".getBytes(StandardCharsets.UTF_8)); os.flush(); return;
+                }
+                DataInputStream din = new DataInputStream(client.getInputStream());
+                int length = din.readInt();
+                if (length <= 0 || length > 48000 * 2 * 15) {
+                    throw new IllegalArgumentException("PCM length out of bounds: " + length);
+                }
+                byte[] pcm = new byte[length];
+                din.readFully(pcm);
+                AudioAttributes attrs = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
+                AudioFormat format = new AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(48000)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build();
+                AudioTrack track = new AudioTrack.Builder().setAudioAttributes(attrs).setAudioFormat(format)
+                        .setBufferSizeInBytes(length).setTransferMode(AudioTrack.MODE_STATIC).build();
+                try {
+                    if (!track.setPreferredDevice(telephony)) throw new IllegalStateException("Telephony Tx rejected");
+                    int written = track.write(pcm, 0, pcm.length, AudioTrack.WRITE_BLOCKING);
+                    if (written != pcm.length) throw new IllegalStateException("short write " + written + "/" + pcm.length);
+                    track.play();
+                    long ms = Math.min(15000L, Math.max(250L, (pcm.length / 2L) * 1000L / 48000L + 150L));
+                    Thread.sleep(ms);
+                    track.stop();
+                    AudioDeviceInfo actual = track.getRoutedDevice();
+                    os.write(("COMPLETE bytes=" + written + " actual=" +
+                            (actual == null ? "null" : actual.getType() + "/" + actual.getId()) + "\n")
+                            .getBytes(StandardCharsets.UTF_8)); os.flush();
+                } finally { track.release(); }
+            } catch (Throwable t) {
+                os.write(("FAILED " + t.getClass().getName() + ": " + String.valueOf(t.getMessage()) + "\n")
+                        .getBytes(StandardCharsets.UTF_8)); os.flush();
+            }
+            return;
+        }
+
+        if (command == COMMAND_UPLINK_TEST) {
             OutputStream os = client.getOutputStream();
             try {
                 Context context = FakeContext.get();
