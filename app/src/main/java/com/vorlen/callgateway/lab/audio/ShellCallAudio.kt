@@ -120,10 +120,10 @@ object ShellCallAudio {
             if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
             val commands = listOf(
                 "id",
-                "dumpsys audio | grep -iE 'mode|call|communication|device|route|strategy' | head -n 120",
-                "dumpsys media.audio_flinger | grep -iE 'thread|output|input|device|session|track|voice|call|telephony|primary' | head -n 180",
-                "dumpsys media.audio_policy | grep -iE 'mix|route|device|output|input|voice|call|telephony|primary|flag' | head -n 220",
-                "service list | grep -i audio"
+                "dumpsys audio | sed -n '/Audio mode:/,/Audio routes:/p'",
+                "dumpsys audio | sed -n '/Audio routes:/,/Audio policies:/p' | head -n 100",
+                "dumpsys media.audio_flinger | grep -iE 'Output thread|Input thread|device|active tracks|session|voice|call|telephony' | head -n 220",
+                "dumpsys media.audio_policy | grep -iE 'Phone state|phone state|Output|Input|Device|Route|Mix|voice|call|telephony' | head -n 260"
             )
             val sections = mutableListOf<String>()
             for (cmd in commands) {
