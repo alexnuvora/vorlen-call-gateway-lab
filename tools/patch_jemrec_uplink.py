@@ -6,14 +6,102 @@ s=s.replace("import android.media.AudioManager;","""import android.media.AudioMa
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
-import android.media.AudioTrack;""")
+import android.media.AudioTrack;\nimport android.media.AudioRecord;""")
 s=s.replace("private static final int COMMAND_RECORD = 'R';","""private static final int COMMAND_RECORD = 'R';
     // Vorlen lab only: bounded digital telephony uplink proof.
     private static final int COMMAND_UPLINK_TEST = 'U';
     private static final int COMMAND_UPLINK_PCM = 'T';
-    private static final int COMMAND_DUPLEX = 'D';""")
+    private static final int COMMAND_DUPLEX = 'D';\n    private static final int COMMAND_CHATGPT_BRIDGE = 'G';""")
 anchor="""        if (command == COMMAND_RECORD) {"""
-handler=r'''        if (command == COMMAND_DUPLEX) {
+handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
+            OutputStream os = client.getOutputStream();
+            AudioRecord record = null;
+            AudioTrack track = null;
+            try {
+                Context context = FakeContext.get();
+                AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+                if (am.getMode() != AudioManager.MODE_IN_CALL) {
+                    os.write(("BLOCKED mode=" + am.getMode() + " (cellular call must be active)\n").getBytes(StandardCharsets.UTF_8));
+                    os.flush(); return;
+                }
+                AudioDeviceInfo telephony = null;
+                AudioDeviceInfo remoteIn = null;
+                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                    if (d.getType() == AudioDeviceInfo.TYPE_TELEPHONY) telephony = d;
+                }
+                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
+                    if (d.getType() == AudioDeviceInfo.TYPE_REMOTE_SUBMIX) remoteIn = d;
+                }
+                if (telephony == null) throw new IllegalStateException("Telephony Tx unavailable");
+                if (remoteIn == null) throw new IllegalStateException("Remote Submix In unavailable");
+
+                final int rate = 48000;
+                final int channelIn = AudioFormat.CHANNEL_IN_STEREO;
+                int recMin = AudioRecord.getMinBufferSize(rate, channelIn, AudioFormat.ENCODING_PCM_16BIT);
+                record = new AudioRecord(8 /* AUDIO_SOURCE_REMOTE_SUBMIX */, rate, channelIn,
+                        AudioFormat.ENCODING_PCM_16BIT, Math.max(recMin, 19200));
+                if (record.getState() != AudioRecord.STATE_INITIALIZED) throw new IllegalStateException("Remote Submix AudioRecord not initialized");
+                record.setPreferredDevice(remoteIn);
+
+                AudioAttributes attrs = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
+                AudioFormat outFormat = new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build();
+                int outMin = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+                track = new AudioTrack.Builder().setAudioAttributes(attrs).setAudioFormat(outFormat)
+                        .setBufferSizeInBytes(Math.max(outMin, 9600)).setTransferMode(AudioTrack.MODE_STREAM).build();
+                if (!track.setPreferredDevice(telephony)) throw new IllegalStateException("Telephony Tx rejected");
+
+                os.write("READY — switch to ChatGPT Voice and make it speak for 10 seconds\n".getBytes(StandardCharsets.UTF_8)); os.flush();
+                record.startRecording();
+                track.play();
+                byte[] stereo = new byte[19200];
+                byte[] mono = new byte[9600];
+                long end = System.currentTimeMillis() + 10000L;
+                long samples = 0, sumSq = 0;
+                int peak = 0, forwarded = 0;
+                while (System.currentTimeMillis() < end) {
+                    int n = record.read(stereo, 0, stereo.length, AudioRecord.READ_BLOCKING);
+                    if (n <= 0) continue;
+                    int frames = n / 4;
+                    for (int i=0; i<frames; i++) {
+                        int p=i*4;
+                        short l=(short)((stereo[p]&255)|(stereo[p+1]<<8));
+                        short r=(short)((stereo[p+2]&255)|(stereo[p+3]<<8));
+                        int v=(l+r)/2;
+                        mono[i*2]=(byte)(v&255); mono[i*2+1]=(byte)((v>>8)&255);
+                        int a=Math.abs(v); if(a>peak) peak=a;
+                        sumSq += (long)v*v; samples++;
+                    }
+                    int bytes=frames*2;
+                    int off=0;
+                    while(off<bytes) {
+                        int w=track.write(mono,off,bytes-off,AudioTrack.WRITE_BLOCKING);
+                        if(w<=0) throw new IllegalStateException("Telephony write "+w);
+                        off+=w;
+                    }
+                    forwarded += bytes;
+                }
+                record.stop(); track.stop();
+                double rms = samples == 0 ? 0.0 : Math.sqrt((double)sumSq / samples);
+                AudioDeviceInfo recRoute=record.getRoutedDevice(), outRoute=track.getRoutedDevice();
+                os.write(("COMPLETE capturedRms=" + String.format(java.util.Locale.US,"%.1f",rms) +
+                        " peak=" + peak + " forwarded=" + forwarded +
+                        " remoteIn=" + (recRoute==null?"null":recRoute.getType()+"/"+recRoute.getId()) +
+                        " telephonyTx=" + (outRoute==null?"null":outRoute.getType()+"/"+outRoute.getId()) + "\n")
+                        .getBytes(StandardCharsets.UTF_8)); os.flush();
+            } catch (Throwable t) {
+                os.write(("FAILED " + t.getClass().getName() + ": " + String.valueOf(t.getMessage()) + "\n")
+                        .getBytes(StandardCharsets.UTF_8)); os.flush();
+            } finally {
+                if (record != null) { try { record.release(); } catch (Throwable ignored) {} }
+                if (track != null) { try { track.release(); } catch (Throwable ignored) {} }
+            }
+            return;
+        }
+
+        if (command == COMMAND_DUPLEX) {
             OutputStream os = client.getOutputStream();
             try {
                 Context context = FakeContext.get();
