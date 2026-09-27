@@ -27,6 +27,7 @@ object ShellCallAudio {
     private const val RECORD = 82
     private const val UPLINK_TEST = 85
     private const val UPLINK_PCM = 84
+    private const val DUPLEX = 68
     private const val NONCE_BYTES = 16
     private const val MAC_BYTES = 32
     private val random = SecureRandom()
@@ -116,6 +117,31 @@ object ShellCallAudio {
         }
     }
 
+
+    class UplinkStream internal constructor(private val socket: Socket) : java.io.Closeable {
+        private val out = java.io.DataOutputStream(socket.getOutputStream())
+        @Synchronized fun write(pcm: ByteArray) {
+            require(pcm.isNotEmpty() && pcm.size <= 192_000) { "PCM chunk must be 1..192000 bytes" }
+            out.writeInt(pcm.size); out.write(pcm); out.flush()
+        }
+        override fun close() {
+            runCatching { out.writeInt(0); out.flush() }
+            runCatching { socket.close() }
+        }
+    }
+
+    suspend fun openUplinkStream(context: Context): Result<UplinkStream> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
+            bootstrap(context).getOrThrow()
+            val socket = open(context, DUPLEX.toByte())
+            socket.soTimeout = 5000
+            val ready = socket.getInputStream().bufferedReader().readLine() ?: error("No streaming uplink response")
+            check(ready.startsWith("READY")) { "Streaming uplink rejected: $ready" }
+            socket.soTimeout = 0
+            UplinkStream(socket)
+        }
+    }
 
     suspend fun uplinkSpeech(context: Context, pcm: ByteArray): TestResult = withContext(Dispatchers.IO) {
         runCatching {
