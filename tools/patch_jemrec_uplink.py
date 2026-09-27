@@ -10,9 +10,61 @@ import android.media.AudioTrack;""")
 s=s.replace("private static final int COMMAND_RECORD = 'R';","""private static final int COMMAND_RECORD = 'R';
     // Vorlen lab only: bounded digital telephony uplink proof.
     private static final int COMMAND_UPLINK_TEST = 'U';
-    private static final int COMMAND_UPLINK_PCM = 'T';""")
+    private static final int COMMAND_UPLINK_PCM = 'T';
+    private static final int COMMAND_DUPLEX = 'D';""")
 anchor="""        if (command == COMMAND_RECORD) {"""
-handler=r'''        if (command == COMMAND_UPLINK_PCM) {
+handler=r'''        if (command == COMMAND_DUPLEX) {
+            OutputStream os = client.getOutputStream();
+            try {
+                Context context = FakeContext.get();
+                AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+                if (am.getMode() != AudioManager.MODE_IN_CALL) {
+                    os.write("BLOCKED not in call\n".getBytes(StandardCharsets.UTF_8)); os.flush(); return;
+                }
+                AudioDeviceInfo telephony = null;
+                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                    if (d.getType() == AudioDeviceInfo.TYPE_TELEPHONY) { telephony = d; break; }
+                }
+                if (telephony == null) { os.write("NO_TELEPHONY_TX\n".getBytes(StandardCharsets.UTF_8)); os.flush(); return; }
+                AudioAttributes attrs = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
+                AudioFormat format = new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(48000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build();
+                int min = AudioTrack.getMinBufferSize(48000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+                AudioTrack track = new AudioTrack.Builder().setAudioAttributes(attrs).setAudioFormat(format)
+                        .setBufferSizeInBytes(Math.max(min, 9600)).setTransferMode(AudioTrack.MODE_STREAM).build();
+                try {
+                    if (!track.setPreferredDevice(telephony)) throw new IllegalStateException("Telephony Tx rejected");
+                    track.play();
+                    os.write("READY 48000 PCM16 MONO\n".getBytes(StandardCharsets.UTF_8)); os.flush();
+                    DataInputStream din = new DataInputStream(client.getInputStream());
+                    while (true) {
+                        int length;
+                        try { length = din.readInt(); } catch (EOFException eof) { break; }
+                        if (length == 0) break;
+                        if (length < 0 || length > 192000) throw new IllegalArgumentException("chunk " + length);
+                        byte[] pcm = new byte[length]; din.readFully(pcm);
+                        int off = 0;
+                        while (off < pcm.length) {
+                            int n = track.write(pcm, off, pcm.length - off, AudioTrack.WRITE_BLOCKING);
+                            if (n <= 0) throw new IllegalStateException("AudioTrack write " + n);
+                            off += n;
+                        }
+                    }
+                    track.stop();
+                    AudioDeviceInfo actual = track.getRoutedDevice();
+                    os.write(("COMPLETE actual=" + (actual == null ? "null" : actual.getType()+"/"+actual.getId()) + "\n")
+                            .getBytes(StandardCharsets.UTF_8)); os.flush();
+                } finally { track.release(); }
+            } catch (Throwable t) {
+                os.write(("FAILED " + t.getClass().getName() + ": " + String.valueOf(t.getMessage()) + "\n")
+                        .getBytes(StandardCharsets.UTF_8)); os.flush();
+            }
+            return;
+        }
+
+        if (command == COMMAND_UPLINK_PCM) {
             OutputStream os = client.getOutputStream();
             try {
                 Context context = FakeContext.get();
