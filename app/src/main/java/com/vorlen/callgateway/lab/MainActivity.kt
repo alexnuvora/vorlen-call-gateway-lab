@@ -8,6 +8,11 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.media.AudioManager
+import android.speech.tts.TextToSpeech
+import android.media.MediaExtractor
+import android.media.MediaCodec
+import java.nio.ByteBuffer
+import java.util.Locale
 import java.io.File
 import android.os.Bundle
 import android.content.Intent
@@ -171,6 +176,46 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        findViewById<Button>(R.id.testSpeechUplink).setOnClickListener {
+            if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
+                audioState.text = "DIGITAL SPEECH UPLINK BLOCKED — no active cellular call"
+            } else {
+                val phrase = findViewById<EditText>(R.id.uplinkSpeechText).text.toString().trim()
+                if (phrase.isBlank()) {
+                    audioState.text = "Enter a speech test phrase"
+                } else {
+                    audioState.text = "Generating speech for digital Telephony Tx…"
+                    val tts = TextToSpeech(this) { statusCode ->
+                        if (statusCode != TextToSpeech.SUCCESS) {
+                            runOnUiThread { audioState.text = "TTS initialization failed" }
+                        } else {
+                            tts.language = Locale.UK
+                            val outFile = File(cacheDir, "vorlen_uplink_speech.wav")
+                            tts.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                                override fun onStart(id: String?) {}
+                                override fun onError(id: String?) { runOnUiThread { audioState.text = "TTS synthesis failed" }; tts.shutdown() }
+                                override fun onDone(id: String?) {
+                                    outboundIo.execute {
+                                        val result = runCatching {
+                                            val pcm = wavTo48kMonoPcm(outFile)
+                                            runBlocking { ShellCallAudio.uplinkSpeech(this@MainActivity, pcm) }
+                                        }.getOrElse { ShellCallAudio.TestResult(false, "DIGITAL SPEECH UPLINK FAILED — " + (it.message ?: it.javaClass.simpleName)) }
+                                        runOnUiThread { audioState.text = result.report }
+                                        tts.shutdown()
+                                    }
+                                }
+                            })
+                            val r = tts.synthesizeToFile(phrase, Bundle(), outFile, "vorlen-uplink")
+                            if (r != TextToSpeech.SUCCESS) {
+                                audioState.text = "TTS synthesis request failed"
+                                tts.shutdown()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         val playCallProof = findViewById<Button>(R.id.playCallProof)
         findViewById<Button>(R.id.proofCallAudio).setOnClickListener {
             audioState.text = "Audio engine: capturing 10 seconds of raw stereo VOICE_CALL audio… keep both people talking"
@@ -252,6 +297,47 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.hangup).setOnClickListener {
             status.text = endSimCall().message
         }
+    }
+
+    private fun wavTo48kMonoPcm(file: File): ByteArray {
+        val bytes = file.readBytes()
+        require(bytes.size > 44 && String(bytes, 0, 4) == "RIFF") { "TTS did not produce WAV audio" }
+        var pos = 12
+        var channels = 1
+        var rate = 0
+        var bits = 16
+        var dataOffset = -1
+        var dataSize = 0
+        while (pos + 8 <= bytes.size) {
+            val id = String(bytes, pos, 4)
+            val size = (bytes[pos+4].toInt() and 255) or ((bytes[pos+5].toInt() and 255) shl 8) or ((bytes[pos+6].toInt() and 255) shl 16) or ((bytes[pos+7].toInt() and 255) shl 24)
+            if (id == "fmt " && pos + 24 <= bytes.size) {
+                channels = (bytes[pos+10].toInt() and 255) or ((bytes[pos+11].toInt() and 255) shl 8)
+                rate = (bytes[pos+12].toInt() and 255) or ((bytes[pos+13].toInt() and 255) shl 8) or ((bytes[pos+14].toInt() and 255) shl 16) or ((bytes[pos+15].toInt() and 255) shl 24)
+                bits = (bytes[pos+22].toInt() and 255) or ((bytes[pos+23].toInt() and 255) shl 8)
+            } else if (id == "data") { dataOffset = pos + 8; dataSize = minOf(size, bytes.size - dataOffset); break }
+            pos += 8 + size + (size and 1)
+        }
+        require(dataOffset >= 0 && rate > 0 && bits == 16 && channels in 1..2) { "Unsupported TTS WAV: rate=$rate channels=$channels bits=$bits" }
+        val frames = dataSize / (2 * channels)
+        val src = ShortArray(frames)
+        var p = dataOffset
+        for (i in 0 until frames) {
+            var sum = 0
+            repeat(channels) { sum += (((bytes[p].toInt() and 255) or (bytes[p+1].toInt() shl 8)).toShort().toInt()); p += 2 }
+            src[i] = (sum / channels).toShort()
+        }
+        val outFrames = ((frames.toLong() * 48000L) / rate).toInt().coerceAtMost(48000 * 15)
+        val out = ByteArray(outFrames * 2)
+        for (i in 0 until outFrames) {
+            val x = i.toDouble() * rate / 48000.0
+            val a = x.toInt().coerceIn(0, frames - 1)
+            val b = (a + 1).coerceAtMost(frames - 1)
+            val frac = x - a
+            val v = (src[a] * (1.0 - frac) + src[b] * frac).toInt().coerceIn(-32768, 32767)
+            out[i*2] = (v and 255).toByte(); out[i*2+1] = ((v shr 8) and 255).toByte()
+        }
+        return out
     }
 
     override fun onDestroy() {
