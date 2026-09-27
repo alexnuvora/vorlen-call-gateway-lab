@@ -95,7 +95,7 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                 int peak = 0, forwarded = 0;
                 long nonZeroSamples = 0;
                 int readCalls = 0, readErrors = 0;
-                int routeChecks = 0, routeLosses = 0, shortWrites = 0;
+                int routeChecks = 0, routeLosses = 0, shortWrites = 0, txRearms = 0;
                 String firstTxRoute = "null", lastTxRoute = "null";
                 while (System.currentTimeMillis() < end) {
                     int n = record.read(stereo, 0, stereo.length, AudioRecord.READ_BLOCKING);
@@ -134,6 +134,17 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                         if(w<=0) throw new IllegalStateException("Telephony write "+w);
                         if(w<want) shortWrites++;
                         off+=w;
+                        // Re-arm Telephony Tx every ~1 second to test whether Samsung only
+                        // passes the initial burst after AudioTrack activation.
+                        if ((forwarded + off) > 0 && ((forwarded + off) % 96000) < txChunkBytes) {
+                            try {
+                                txRearms++;
+                                track.pause();
+                                track.flush();
+                                track.setPreferredDevice(telephony);
+                                track.play();
+                            } catch (Throwable ignored) {}
+                        }
                     }
                     forwarded += bytes;
                 }
@@ -156,6 +167,7 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                         " telephonyTxRouteChecks=" + routeChecks +
                         " telephonyTxRouteLosses=" + routeLosses +
                         " telephonyTxShortWrites=" + shortWrites +
+                        " telephonyTxRearms=" + txRearms +
                         " verdict=" + (peak > 8 && rms > 1.0 ? "CAPTURE_SIGNAL_PRESENT" : "CAPTURE_SILENT") + "\n")
                         .getBytes(StandardCharsets.UTF_8)); os.flush();
             } catch (Throwable t) {
