@@ -359,6 +359,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun pcm48MonoToWav(pcm: ByteArray): ByteArray {
+        val out = java.io.ByteArrayOutputStream(44 + pcm.size)
+        val d = java.io.DataOutputStream(out)
+        fun le16(v:Int){ d.writeByte(v and 255); d.writeByte((v ushr 8) and 255) }
+        fun le32(v:Int){ d.writeByte(v and 255); d.writeByte((v ushr 8) and 255); d.writeByte((v ushr 16) and 255); d.writeByte((v ushr 24) and 255) }
+        d.writeBytes("RIFF"); le32(36 + pcm.size); d.writeBytes("WAVEfmt "); le32(16); le16(1); le16(1)
+        le32(48000); le32(96000); le16(2); le16(16); d.writeBytes("data"); le32(pcm.size); d.write(pcm); d.flush()
+        return out.toByteArray()
+    }
+
+    private fun liveTurnRequest(token:String, pcm:ByteArray): Pair<String,String> {
+        val boundary = "Vorlen" + System.currentTimeMillis()
+        val c = URL(LIVE_TURN_URL).openConnection() as HttpURLConnection
+        c.requestMethod="POST"; c.doOutput=true; c.connectTimeout=15000; c.readTimeout=45000
+        c.setRequestProperty("x-device-code", DEVICE_CODE); c.setRequestProperty("x-device-token", token)
+        c.setRequestProperty("Content-Type","multipart/form-data; boundary=$boundary")
+        java.io.DataOutputStream(c.outputStream).use { o ->
+            fun field(name:String,value:String){ o.writeBytes("--$boundary\r\nContent-Disposition: form-data; name=\"$name\"\r\n\r\n$value\r\n") }
+            field("request_id", activeRequestId ?: "")
+            o.writeBytes("--$boundary\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"turn.wav\"\r\nContent-Type: audio/wav\r\n\r\n")
+            o.write(pcm48MonoToWav(pcm)); o.writeBytes("\r\n--$boundary--\r\n")
+        }
+        val code=c.responseCode; val body=(if(code in 200..299)c.inputStream else c.errorStream).bufferedReader().readText(); c.disconnect()
+        if(code !in 200..299) error("Live AI HTTP $code: $body")
+        val j=JSONObject(body); return j.optString("heard") to j.optString("reply")
+    }
+
+    private fun speakAlexStreaming(text:String, done:(String?)->Unit) {
+        lateinit var tts:TextToSpeech
+        tts=TextToSpeech(this){ status ->
+            if(status!=TextToSpeech.SUCCESS){ done("TTS init failed"); return@TextToSpeech }
+            tts.language=Locale.UK
+            val file=File(cacheDir,"alex_live.wav")
+            tts.setOnUtteranceProgressListener(object:android.speech.tts.UtteranceProgressListener(){
+                override fun onStart(id:String?){}
+                override fun onError(id:String?){ tts.shutdown(); done("TTS synthesis failed") }
+                override fun onDone(id:String?){
+                    try {
+                        val pcm=wavTo48kMonoPcm(file)
+                        val stream=runBlocking { ShellCallAudio.openUplinkStream(this@MainActivity).getOrThrow() }
+                        stream.use { var p=0; while(p<pcm.size){ val e=minOf(p+9600,pcm.size); it.write(pcm.copyOfRange(p,e)); p=e } }
+                        tts.shutdown(); done(null)
+                    } catch(e:Throwable){ tts.shutdown(); done(e.message) }
+                }
+            })
+            if(tts.synthesizeToFile(text,Bundle(),file,"alex-live")!=TextToSpeech.SUCCESS){ tts.shutdown(); done("TTS request failed") }
+        }
+    }
+
     private fun wavTo48kMonoPcm(file: File): ByteArray {
         val bytes = file.readBytes()
         require(bytes.size > 44 && String(bytes, 0, 4) == "RIFF") { "TTS did not produce WAV audio" }
@@ -610,7 +659,7 @@ class MainActivity : AppCompatActivity() {
         private const val EXTRA_PHONE = "phone_number"
         private const val EXTRA_COMMAND_ID = "command_id"
         private const val DEVICE_CODE = "s24fe-primary"
-        private const val GATEWAY_URL = "https://mzkaodoruhklzluikagy.supabase.co/functions/v1/vorlen-call-device"
+        private const val GATEWAY_URL = "https://mzkaodoruhklzluikagy.supabase.co/functions/v1/vorlen-call-device"\n        private const val LIVE_TURN_URL = "https://mzkaodoruhklzluikagy.supabase.co/functions/v1/vorlen-live-turn"
         private const val APPROVAL_CHANNEL = "approved_calls"
     }
 
