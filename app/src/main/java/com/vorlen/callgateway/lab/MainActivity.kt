@@ -51,6 +51,7 @@ class MainActivity : AppCompatActivity() {
             add(Manifest.permission.CALL_PHONE)
             add(Manifest.permission.READ_PHONE_STATE)
             add(Manifest.permission.ANSWER_PHONE_CALLS)
+            add(Manifest.permission.RECORD_AUDIO)
             if (android.os.Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }.toTypedArray()
         if (permissions.any { ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }) {
@@ -83,6 +84,28 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }, PhoneStateListener.LISTEN_CALL_STATE)
+
+        val audioState = findViewById<TextView>(R.id.audioState)
+        findViewById<Button>(R.id.audioSelfTest).setOnClickListener {
+            audioState.text = "Audio engine: testing MIC and protected VOICE_CALL…"
+            outboundIo.execute {
+                val mic = CallAudioDiagnostics.microphone(this)
+                val voice = CallAudioDiagnostics.protectedVoiceCall(this)
+                runOnUiThread {
+                    audioState.text = buildString {
+                        append("MIC: ")
+                        append(if (mic.hasSignal) "signal detected" else mic.error ?: "no signal")
+                        append("\nVOICE_CALL (normal app UID): ")
+                        append(if (voice.hasSignal) "signal detected" else voice.error ?: "blocked/no signal")
+                        append("\n")
+                        append(
+                            if (voice.hasSignal) "Protected source is directly available on this device."
+                            else "Expected on modern Android: normal app UID cannot prove digital call capture. Shell-daemon test is the next stage."
+                        )
+                    }
+                }
+            }
+        }
 
         findViewById<Button>(R.id.approveSession).setOnClickListener {
             sessionApproved = !sessionApproved
