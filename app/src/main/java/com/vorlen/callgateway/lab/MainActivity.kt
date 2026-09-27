@@ -217,6 +217,51 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        findViewById<Button>(R.id.testStreamingSpeech).setOnClickListener {
+            if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
+                audioState.text = "STREAMING UPLINK BLOCKED — no active cellular call"
+            } else {
+                val phrase = findViewById<EditText>(R.id.uplinkSpeechText).text.toString().trim()
+                audioState.text = "Opening persistent digital Telephony Tx stream…"
+                lateinit var tts: TextToSpeech
+                tts = TextToSpeech(this) { statusCode ->
+                    if (statusCode != TextToSpeech.SUCCESS) {
+                        audioState.text = "Streaming TTS initialization failed"
+                    } else {
+                        tts.language = Locale.UK
+                        val outFile = File(cacheDir, "vorlen_stream_speech.wav")
+                        tts.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                            override fun onStart(id: String?) {}
+                            override fun onError(id: String?) { runOnUiThread { audioState.text = "Streaming TTS synthesis failed" }; tts.shutdown() }
+                            override fun onDone(id: String?) {
+                                outboundIo.execute {
+                                    val result = runCatching {
+                                        val pcm = wavTo48kMonoPcm(outFile)
+                                        val stream = runBlocking { ShellCallAudio.openUplinkStream(this@MainActivity).getOrThrow() }
+                                        stream.use {
+                                            var off = 0
+                                            val chunk = 9600 // 100 ms @ 48k mono PCM16
+                                            while (off < pcm.size) {
+                                                val end = minOf(off + chunk, pcm.size)
+                                                it.write(pcm.copyOfRange(off, end))
+                                                off = end
+                                            }
+                                        }
+                                        ShellCallAudio.TestResult(true, "STREAMING DIGITAL SPEECH — SENT " + pcm.size + " bytes in 100 ms PCM chunks to Telephony Tx")
+                                    }.getOrElse { ShellCallAudio.TestResult(false, "STREAMING DIGITAL SPEECH FAILED — " + (it.message ?: it.javaClass.simpleName)) }
+                                    runOnUiThread { audioState.text = result.report }
+                                    tts.shutdown()
+                                }
+                            }
+                        })
+                        if (tts.synthesizeToFile(phrase, Bundle(), outFile, "vorlen-stream-uplink") != TextToSpeech.SUCCESS) {
+                            audioState.text = "Streaming TTS request failed"; tts.shutdown()
+                        }
+                    }
+                }
+            }
+        }
+
         val playCallProof = findViewById<Button>(R.id.playCallProof)
         findViewById<Button>(R.id.proofCallAudio).setOnClickListener {
             audioState.text = "Audio engine: capturing 10 seconds of raw stereo VOICE_CALL audio… keep both people talking"
