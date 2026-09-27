@@ -160,50 +160,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.testIncallUplink).setOnClickListener {
-            val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
-            if (audioManager.mode != AudioManager.MODE_IN_CALL || lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
+            if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
                 audioState.text = "UPLINK TEST BLOCKED — no active cellular call"
             } else {
-                audioState.text = "Testing 1-second low-level digital uplink tone…"
+                audioState.text = "Testing 1-second digital uplink tone from shell UID…"
                 outboundIo.execute {
-                    val result = runCatching {
-                        val sampleRate = 48000
-                        val samples = ShortArray(sampleRate)
-                        val amplitude = 1800.0
-                        val frequency = 700.0
-                        for (i in samples.indices) {
-                            samples[i] = (kotlin.math.sin(2.0 * Math.PI * frequency * i / sampleRate) * amplitude).toInt().toShort()
-                        }
-                        val attrsBuilder = AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        // AUDIO_OUTPUT_FLAG_INCALL_MUSIC is an AudioTrack output flag (0x10000),
-                        // not an AudioAttributes flag. Ask the hidden AudioTrack builder for it directly.
-                        val setAudioTrackFlags = AudioTrack.Builder::class.java.getDeclaredMethod("setAudioTrackFlags", Int::class.javaPrimitiveType)
-                        setAudioTrackFlags.isAccessible = true
-                        val trackBuilder = AudioTrack.Builder()
-                            .setAudioAttributes(attrsBuilder.build())
-                            .setAudioFormat(AudioFormat.Builder()
-                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                                .setSampleRate(sampleRate)
-                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                                .build())
-                            .setBufferSizeInBytes(samples.size * 2)
-                            .setTransferMode(AudioTrack.MODE_STATIC)
-                        setAudioTrackFlags.invoke(trackBuilder, 0x10000)
-                        val track = trackBuilder.build()
-                        try {
-                            check(track.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack failed to initialize" }
-                            track.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
-                            track.play()
-                            Thread.sleep(1100)
-                            track.stop()
-                        } finally {
-                            track.release()
-                        }
-                        "UPLINK TEST COMPLETE — ask the remote phone whether it heard a short tone. No vendor mixer controls were changed."
-                    }.getOrElse { "UPLINK TEST FAILED — " + (it.message ?: it.javaClass.simpleName) }
-                    runOnUiThread { audioState.text = result }
+                    val result = runBlocking { ShellCallAudio.uplinkTest(this@MainActivity) }
+                    runOnUiThread { audioState.text = result.report }
                 }
             }
         }
