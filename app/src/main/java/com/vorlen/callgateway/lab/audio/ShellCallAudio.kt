@@ -120,10 +120,10 @@ object ShellCallAudio {
             if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
             val commands = listOf(
                 "id",
-                "dumpsys audio",
-                "dumpsys media.audio_flinger",
-                "dumpsys media.audio_policy",
-                "cmd media.audio_policy help 2>&1"
+                "dumpsys audio | grep -iE 'mode|call|communication|device|route|strategy' | head -n 120",
+                "dumpsys media.audio_flinger | grep -iE 'thread|output|input|device|session|track|voice|call|telephony|primary' | head -n 180",
+                "dumpsys media.audio_policy | grep -iE 'mix|route|device|output|input|voice|call|telephony|primary|flag' | head -n 220",
+                "service list | grep -i audio"
             )
             val sections = mutableListOf<String>()
             for (cmd in commands) {
@@ -132,7 +132,7 @@ object ShellCallAudio {
             }
             val report = sections.joinToString("\n\n")
             File(context.cacheDir, "vorlen_audio_summary.txt").writeText(report)
-            TestResult(true, "AUDIO ROUTE SUMMARY\n" + report.take(5000))
+            TestResult(true, "AUDIO ROUTE SUMMARY\n" + report.take(14000))
         }.getOrElse { TestResult(false, "AUDIO ROUTE PROBE FAILED — " + it.message) }
     }
 
