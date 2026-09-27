@@ -3,6 +3,8 @@ package com.vorlen.callgateway.lab
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.media.MediaPlayer
+import java.io.File
 import android.os.Bundle
 import android.content.Intent
 import android.app.PendingIntent
@@ -35,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var sawOffHook = false
     @Volatile private var lastCallState = TelephonyManager.CALL_STATE_IDLE
     @Volatile private var sessionApproved = false
+    private var proofPlayer: MediaPlayer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -144,6 +147,39 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        val playCallProof = findViewById<Button>(R.id.playCallProof)
+        findViewById<Button>(R.id.proofCallAudio).setOnClickListener {
+            audioState.text = "Audio engine: capturing 10 seconds of raw stereo VOICE_CALL audio… keep both people talking"
+            playCallProof.isEnabled = false
+            outboundIo.execute {
+                val result = runBlocking { ShellCallAudio.proofCapture(this@MainActivity, 10) }
+                runOnUiThread {
+                    audioState.text = result.report
+                    playCallProof.isEnabled = result.wav?.exists() == true
+                }
+            }
+        }
+
+        playCallProof.setOnClickListener {
+            val wav = File(cacheDir, "vorlen_voice_call_proof.wav")
+            if (!wav.exists()) {
+                audioState.text = "Audio engine: no proof recording available yet"
+            } else {
+                runCatching {
+                    proofPlayer?.release()
+                    proofPlayer = MediaPlayer().apply {
+                        setDataSource(wav.absolutePath)
+                        prepare()
+                        setOnCompletionListener { p -> p.release(); proofPlayer = null }
+                        start()
+                    }
+                    audioState.text = "Audio engine: playing captured digital call proof"
+                }.onFailure {
+                    audioState.text = "Audio engine: playback failed — ${it.message}"
+                }
+            }
+        }
+
         findViewById<Button>(R.id.audioSelfTest).setOnClickListener {
             audioState.text = "Audio engine: testing MIC and protected VOICE_CALL…"
             outboundIo.execute {
@@ -199,6 +235,8 @@ class MainActivity : AppCompatActivity() {
         polling = false
         pollingIo.shutdownNow()
         outboundIo.shutdownNow()
+        proofPlayer?.release()
+        proofPlayer = null
         super.onDestroy()
     }
 
