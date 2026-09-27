@@ -26,6 +26,7 @@ object ShellCallAudio {
     private const val HELLO = 65
     private const val RECORD = 82
     private const val UPLINK_TEST = 85
+    private const val UPLINK_PCM = 84
     private const val NONCE_BYTES = 16
     private const val MAC_BYTES = 32
     private val random = SecureRandom()
@@ -115,6 +116,21 @@ object ShellCallAudio {
         }
     }
 
+
+    suspend fun uplinkSpeech(context: Context, pcm: ByteArray): TestResult = withContext(Dispatchers.IO) {
+        runCatching {
+            require(pcm.isNotEmpty() && pcm.size <= 48_000 * 2 * 15) { "Speech PCM must be 0–15 seconds, 48 kHz mono PCM16" }
+            if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
+            bootstrap(context).getOrThrow()
+            open(context, UPLINK_PCM.toByte()).use { socket ->
+                socket.soTimeout = 20_000
+                val out = java.io.DataOutputStream(socket.getOutputStream())
+                out.writeInt(pcm.size); out.write(pcm); out.flush()
+                val response = socket.getInputStream().bufferedReader().readLine() ?: "No response from shell daemon"
+                TestResult(response.startsWith("COMPLETE"), "DIGITAL SPEECH UPLINK — " + response)
+            }
+        }.getOrElse { TestResult(false, "DIGITAL SPEECH UPLINK FAILED — " + (it.message ?: it.javaClass.simpleName)) }
+    }
 
     suspend fun uplinkTest(context: Context): TestResult = withContext(Dispatchers.IO) {
         runCatching {
