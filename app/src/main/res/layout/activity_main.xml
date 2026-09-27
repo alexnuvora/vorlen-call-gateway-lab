@@ -13,4 +13,7 @@
     <TextView android:id="@+id/sessionState" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Calling session: not approved" android:layout_marginTop="8dp"/>
     <TextView android:id="@+id/remoteState" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Remote gateway: not connected" android:layout_marginTop="12dp"/>
     <TextView android:id="@+id/callState" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Call state: idle" android:layout_marginTop="16dp"/>
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Digital call audio experiment" android:textStyle="bold" android:layout_marginTop="20dp"/>
+    <Button android:id="@+id/audioSelfTest" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Run Call Audio Self-Test" android:layout_marginTop="8dp"/>
+    <TextView android:id="@+id/audioState" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Audio engine: not tested" android:layout_marginTop="8dp"/>
 </LinearLayout>
