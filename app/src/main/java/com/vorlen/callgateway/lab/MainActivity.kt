@@ -185,7 +185,8 @@ class MainActivity : AppCompatActivity() {
                     audioState.text = "Enter a speech test phrase"
                 } else {
                     audioState.text = "Generating speech for digital Telephony Tx…"
-                    val tts = TextToSpeech(this) { statusCode ->
+                    lateinit var tts: TextToSpeech
+                    tts = TextToSpeech(this) { statusCode ->
                         if (statusCode != TextToSpeech.SUCCESS) {
                             runOnUiThread { audioState.text = "TTS initialization failed" }
                         } else {
