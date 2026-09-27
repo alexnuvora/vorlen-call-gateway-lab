@@ -119,21 +119,19 @@ object ShellCallAudio {
         runCatching {
             if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
             val commands = listOf(
-                "id",
-                "dumpsys audio | sed -n '/Audio mode:/,/Audio routes:/p'",
-                "dumpsys audio | sed -n '/Audio routes:/,/Audio policies:/p' | head -n 100",
-                "dumpsys media.audio_flinger | grep -iE 'Output thread|Input thread|device|active tracks|session|voice|call|telephony' | head -n 220",
-                "dumpsys media.audio_policy | grep -iE 'incall|in.call|voice_tx|voice tx|voice_rx|voice rx|telephony|AUDIO_OUTPUT_FLAG_INCALL_MUSIC|0x4000|mixport|mix port' | head -n 240",
-                "grep -RinE 'incall_music|INCALL_MUSIC|voice_tx|voice_rx' /vendor/etc/audio* /vendor/etc/*audio* /odm/etc/audio* /odm/etc/*audio* 2>/dev/null | head -n 160"
+                "CALL STATE" to "dumpsys audio | sed -n '/Audio mode:/,/Audio routes:/p' | head -n 28",
+                "LIVE CALL ROUTE" to "dumpsys media.audio_flinger | grep -iE 'Call :|Output devices:|Input device:|AUDIO_DEVICE_(OUT|IN)_(EARPIECE|SPEAKER|TELEPHONY|VOICE_CALL)' | tail -n 40",
+                "INCALL POLICY" to "dumpsys media.audio_policy | grep -iE 'incall|in.call|voice_tx|voice tx|voice_rx|voice rx|telephony|INCALL_MUSIC|mixport|mix port' | head -n 120",
+                "VENDOR ROUTES" to "grep -RinE 'incall_music|INCALL_MUSIC|voice_tx|voice_rx|telephony_tx|telephony_rx' /vendor/etc/audio* /vendor/etc/*audio* /odm/etc/audio* /odm/etc/*audio* 2>/dev/null | head -n 120"
             )
             val sections = mutableListOf<String>()
-            for (cmd in commands) {
-                val output = AdbTransport.exec(cmd).getOrElse { "Unavailable: " + it.message }
-                sections += ">>> $cmd\n$output"
+            for ((label, cmd) in commands) {
+                val output = AdbTransport.exec(cmd).getOrElse { "Unavailable: " + it.message }.trim()
+                sections += "=== $label ===\n" + if (output.isBlank()) "(no matches)" else output
             }
             val report = sections.joinToString("\n\n")
             File(context.cacheDir, "vorlen_audio_summary.txt").writeText(report)
-            TestResult(true, "AUDIO ROUTE SUMMARY\n" + report.take(14000))
+            TestResult(true, "UPLINK ROUTE PROBE\n\n$report")
         }.getOrElse { TestResult(false, "AUDIO ROUTE PROBE FAILED — " + it.message) }
     }
 
