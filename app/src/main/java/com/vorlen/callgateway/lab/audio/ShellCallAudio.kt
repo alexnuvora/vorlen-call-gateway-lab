@@ -171,6 +171,29 @@ object ShellCallAudio {
         }.getOrElse { TestResult(false, "SHELL UPLINK TEST FAILED — " + (it.message ?: it.javaClass.simpleName)) }
     }
 
+    suspend fun chatGptVoiceProbe(context: Context): TestResult = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
+            val commands = listOf(
+                "AUDIO MODE + OWNERS" to "dumpsys audio | grep -iE 'Audio mode|mode owner|communication|voice|record|playback' | head -n 180",
+                "ACTIVE RECORD CLIENTS" to "dumpsys media.audio_flinger | grep -iE -B6 -A14 'Record Thread|RecordTrack|Active Tracks|session|uid|source|input' | head -n 260",
+                "ACTIVE PLAYBACK CLIENTS" to "dumpsys media.audio_flinger | grep -iE -B6 -A14 'Playback Thread|Track|Active Tracks|session|uid|usage|output' | head -n 320",
+                "POLICY INPUTS OUTPUTS" to "dumpsys media.audio_policy | grep -iE -B5 -A12 'Input|Output|active|session|uid|source|usage|remote.submix|telephony|voice' | head -n 420",
+                "REMOTE SUBMIX + PATCHES" to "dumpsys media.audio_policy | grep -iE -B8 -A18 'remote.submix|AUDIO_DEVICE_(IN|OUT)_REMOTE_SUBMIX|audio patch|patches|mix port|mixport' | head -n 300",
+                "CHATGPT PROCESS" to "ps -A -o USER,UID,PID,NAME,ARGS 2>/dev/null | grep -iE 'openai|chatgpt' | head -n 40",
+                "AUDIO PORTS" to "dumpsys media.audio_flinger | grep -iE 'AUDIO_DEVICE_(IN|OUT)_(REMOTE_SUBMIX|TELEPHONY|VOICE_CALL)|Telephony (Tx|Rx)|Remote Submix' | head -n 160"
+            )
+            val sections = mutableListOf<String>()
+            for ((label, cmd) in commands) {
+                val output = AdbTransport.exec(cmd).getOrElse { "Unavailable: " + it.message }.trim()
+                sections += "=== $label ===\n" + if (output.isBlank()) "(no matches)" else output
+            }
+            val report = sections.joinToString("\n\n")
+            File(context.cacheDir, "vorlen_chatgpt_voice_probe.txt").writeText(report)
+            TestResult(true, "CHATGPT VOICE LIVE AUDIO PROBE\nRun while ChatGPT Voice is actively speaking/listening.\n\n$report")
+        }.getOrElse { TestResult(false, "CHATGPT VOICE PROBE FAILED — " + (it.message ?: it.javaClass.simpleName)) }
+    }
+
     suspend fun audioDeviceSummary(context: Context): TestResult = withContext(Dispatchers.IO) {
         runCatching {
             if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
