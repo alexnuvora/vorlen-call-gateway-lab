@@ -6,7 +6,7 @@ s=s.replace("import android.media.AudioManager;","""import android.media.AudioMa
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
-import android.media.AudioTrack;\nimport android.media.AudioRecord;""")
+import android.media.AudioTrack;\nimport android.media.AudioRecord;\nimport android.media.audiopolicy.AudioMix;\nimport android.media.audiopolicy.AudioMixingRule;\nimport android.media.audiopolicy.AudioPolicy;""")
 s=s.replace("private static final int COMMAND_RECORD = 'R';","""private static final int COMMAND_RECORD = 'R';
     // Vorlen lab only: bounded digital telephony uplink proof.
     private static final int COMMAND_UPLINK_TEST = 'U';
@@ -25,23 +25,35 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                     os.flush(); return;
                 }
                 AudioDeviceInfo telephony = null;
-                AudioDeviceInfo remoteIn = null;
                 for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
                     if (d.getType() == AudioDeviceInfo.TYPE_TELEPHONY) telephony = d;
                 }
-                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
-                    if (d.getType() == AudioDeviceInfo.TYPE_REMOTE_SUBMIX) remoteIn = d;
-                }
                 if (telephony == null) throw new IllegalStateException("Telephony Tx unavailable");
-                if (remoteIn == null) throw new IllegalStateException("Remote Submix In unavailable");
 
+                // REMOTE_SUBMIX alone is silent unless an AudioPolicy mix feeds it. Build a
+                // loopback mix for VOICE_COMMUNICATION playback (ChatGPT Voice), and capture
+                // the policy's record sink directly.
                 final int rate = 48000;
                 final int channelIn = AudioFormat.CHANNEL_IN_STEREO;
-                int recMin = AudioRecord.getMinBufferSize(rate, channelIn, AudioFormat.ENCODING_PCM_16BIT);
-                record = new AudioRecord(8 /* AUDIO_SOURCE_REMOTE_SUBMIX */, rate, channelIn,
-                        AudioFormat.ENCODING_PCM_16BIT, Math.max(recMin, 19200));
-                if (record.getState() != AudioRecord.STATE_INITIALIZED) throw new IllegalStateException("Remote Submix AudioRecord not initialized");
-                record.setPreferredDevice(remoteIn);
+                AudioFormat mixFormat = new AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(rate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build();
+                AudioAttributes voiceAttrs = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).build();
+                AudioMixingRule rule = new AudioMixingRule.Builder()
+                        .addRule(voiceAttrs, AudioMixingRule.RULE_MATCH_ATTRIBUTE_USAGE).build();
+                AudioMix mix = new AudioMix.Builder(rule).setFormat(mixFormat)
+                        .setRouteFlags(AudioMix.ROUTE_FLAG_LOOP_BACK | AudioMix.ROUTE_FLAG_RENDER).build();
+                AudioPolicy policy = new AudioPolicy.Builder(context).addMix(mix).build();
+                int policyStatus = am.registerAudioPolicy(policy);
+                if (policyStatus != AudioManager.SUCCESS)
+                    throw new IllegalStateException("AudioPolicy registration failed status=" + policyStatus);
+                record = policy.createAudioRecordSink(mix);
+                if (record == null || record.getState() != AudioRecord.STATE_INITIALIZED) {
+                    try { am.unregisterAudioPolicy(policy); } catch (Throwable ignored) {}
+                    throw new IllegalStateException("AudioPolicy loopback sink not initialized");
+                }
 
                 AudioAttributes attrs = new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -86,7 +98,7 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                 record.stop(); track.stop();
                 double rms = samples == 0 ? 0.0 : Math.sqrt((double)sumSq / samples);
                 AudioDeviceInfo recRoute=record.getRoutedDevice(), outRoute=track.getRoutedDevice();
-                os.write(("COMPLETE capturedRms=" + String.format(java.util.Locale.US,"%.1f",rms) +
+                os.write(("COMPLETE policyLoopback=VOICE_COMMUNICATION capturedRms=" + String.format(java.util.Locale.US,"%.1f",rms) +
                         " peak=" + peak + " forwarded=" + forwarded +
                         " remoteIn=" + (recRoute==null?"null":recRoute.getType()+"/"+recRoute.getId()) +
                         " telephonyTx=" + (outRoute==null?"null":outRoute.getType()+"/"+outRoute.getId()) + "\n")
