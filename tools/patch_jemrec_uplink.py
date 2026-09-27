@@ -93,9 +93,12 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                 long end = System.currentTimeMillis() + 10000L;
                 long samples = 0, sumSq = 0;
                 int peak = 0, forwarded = 0;
+                long nonZeroSamples = 0;
+                int readCalls = 0, readErrors = 0;
                 while (System.currentTimeMillis() < end) {
                     int n = record.read(stereo, 0, stereo.length, AudioRecord.READ_BLOCKING);
-                    if (n <= 0) continue;
+                    if (n <= 0) { readErrors++; continue; }
+                    readCalls++;
                     int frames = n / 4;
                     for (int i=0; i<frames; i++) {
                         int p=i*4;
@@ -104,6 +107,7 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                         int v=(l+r)/2;
                         mono[i*2]=(byte)(v&255); mono[i*2+1]=(byte)((v>>8)&255);
                         int a=Math.abs(v); if(a>peak) peak=a;
+                        if (v != 0) nonZeroSamples++;
                         sumSq += (long)v*v; samples++;
                     }
                     int bytes=frames*2;
@@ -118,10 +122,18 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                 record.stop(); track.stop();
                 double rms = samples == 0 ? 0.0 : Math.sqrt((double)sumSq / samples);
                 AudioDeviceInfo recRoute=record.getRoutedDevice(), outRoute=track.getRoutedDevice();
-                os.write(("COMPLETE capturePath=" + capturePath + " capturedRms=" + String.format(java.util.Locale.US,"%.1f",rms) +
-                        " peak=" + peak + " forwarded=" + forwarded +
-                        " remoteIn=" + (recRoute==null?"null":recRoute.getType()+"/"+recRoute.getId()) +
-                        " telephonyTx=" + (outRoute==null?"null":outRoute.getType()+"/"+outRoute.getId()) + "\n")
+                String remoteRoute = recRoute==null ? "null" : recRoute.getType()+"/"+recRoute.getId();
+                String txRoute = outRoute==null ? "null" : outRoute.getType()+"/"+outRoute.getId();
+                double nonZeroPct = samples == 0 ? 0.0 : (100.0 * nonZeroSamples / samples);
+                os.write(("COMPLETE capturePath=" + capturePath +
+                        " playbackCaptureRms=" + String.format(java.util.Locale.US,"%.1f",rms) +
+                        " playbackCapturePeak=" + peak +
+                        " playbackNonZeroPct=" + String.format(java.util.Locale.US,"%.2f",nonZeroPct) +
+                        " playbackReadCalls=" + readCalls + " playbackReadErrors=" + readErrors +
+                        " remoteSubmixRoute=" + remoteRoute +
+                        " telephonyTxBytes=" + forwarded +
+                        " telephonyTxRoute=" + txRoute +
+                        " verdict=" + (peak > 8 && rms > 1.0 ? "CAPTURE_SIGNAL_PRESENT" : "CAPTURE_SILENT") + "\n")
                         .getBytes(StandardCharsets.UTF_8)); os.flush();
             } catch (Throwable t) {
                 os.write(("FAILED " + t.getClass().getName() + ": " + String.valueOf(t.getMessage()) + "\n")
