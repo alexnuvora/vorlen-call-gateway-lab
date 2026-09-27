@@ -196,7 +196,10 @@ object ShellCallAudio {
     suspend fun captureRemoteTurn(context: Context, maxSeconds: Int = 12): Result<SpeechTurn> = withContext(Dispatchers.IO) {
         runCatching {
             if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
-            if (!ping()) bootstrapRaw(context).getOrThrow()
+            // Always restart in RAW mode here. A resident daemon can be left behind by an older
+            // APK/process with a different in-memory auth token even though its unauthenticated
+            // PING still succeeds. Bootstrap uses this app's current token and removes that race.
+            bootstrapRaw(context).getOrThrow()
             open(context, RECORD.toByte()).use { socket ->
                 socket.soTimeout = 1500
                 val input = DataInputStream(socket.getInputStream().buffered())
