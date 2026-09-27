@@ -37,11 +37,43 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
 
                 final int rate = 48000;
                 final int channelIn = AudioFormat.CHANNEL_IN_STEREO;
-                int recMin = AudioRecord.getMinBufferSize(rate, channelIn, AudioFormat.ENCODING_PCM_16BIT);
-                record = new AudioRecord(8 /* AUDIO_SOURCE_REMOTE_SUBMIX */, rate, channelIn,
-                        AudioFormat.ENCODING_PCM_16BIT, Math.max(recMin, 19200));
-                if (record.getState() != AudioRecord.STATE_INITIALIZED) throw new IllegalStateException("Remote Submix AudioRecord not initialized");
-                record.setPreferredDevice(remoteIn);
+                String capturePath = "unknown";
+                try {
+                    Class<?> rbc = Class.forName("android.media.audiopolicy.AudioMixingRule$Builder");
+                    Object rb = rbc.getConstructor().newInstance();
+                    AudioAttributes captureAttrs = new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
+                    rbc.getMethod("addRule", AudioAttributes.class, int.class).invoke(rb, captureAttrs, 1);
+                    Object rule = rbc.getMethod("build").invoke(rb);
+
+                    Class<?> rc = Class.forName("android.media.audiopolicy.AudioMixingRule");
+                    Class<?> mbc = Class.forName("android.media.audiopolicy.AudioMix$Builder");
+                    Object mb = mbc.getConstructor(rc).newInstance(rule);
+                    AudioFormat mixFormat = new AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(rate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build();
+                    mbc.getMethod("setFormat", AudioFormat.class).invoke(mb, mixFormat);
+                    mbc.getMethod("setRouteFlags", int.class).invoke(mb, 2);
+                    Object mix = mbc.getMethod("build").invoke(mb);
+
+                    Class<?> mc = Class.forName("android.media.audiopolicy.AudioMix");
+                    Class<?> pbc = Class.forName("android.media.audiopolicy.AudioPolicy$Builder");
+                    Object pb = pbc.getConstructor(Context.class).newInstance(context);
+                    pbc.getMethod("addMix", mc).invoke(pb, mix);
+                    Object policy = pbc.getMethod("build").invoke(pb);
+                    Class<?> pc = Class.forName("android.media.audiopolicy.AudioPolicy");
+                    int status = ((Integer) AudioManager.class.getMethod("registerAudioPolicy", pc)
+                            .invoke(am, policy)).intValue();
+                    if (status != 0) throw new IllegalStateException("registerAudioPolicy=" + status);
+                    record = (AudioRecord) pc.getMethod("createAudioRecordSink", mc).invoke(policy, mix);
+                    if (record == null || record.getState() != AudioRecord.STATE_INITIALIZED)
+                        throw new IllegalStateException("loopback sink not initialized");
+                    capturePath = "policy-loopback";
+                } catch (Throwable e) {
+                    throw new IllegalStateException("AudioPolicy loopback failed: " + e.toString(), e);
+                }
 
                 AudioAttributes attrs = new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -86,7 +118,7 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                 record.stop(); track.stop();
                 double rms = samples == 0 ? 0.0 : Math.sqrt((double)sumSq / samples);
                 AudioDeviceInfo recRoute=record.getRoutedDevice(), outRoute=track.getRoutedDevice();
-                os.write(("COMPLETE capturedRms=" + String.format(java.util.Locale.US,"%.1f",rms) +
+                os.write(("COMPLETE capturePath=" + capturePath + " capturedRms=" + String.format(java.util.Locale.US,"%.1f",rms) +
                         " peak=" + peak + " forwarded=" + forwarded +
                         " remoteIn=" + (recRoute==null?"null":recRoute.getType()+"/"+recRoute.getId()) +
                         " telephonyTx=" + (outRoute==null?"null":outRoute.getType()+"/"+outRoute.getId()) + "\n")
