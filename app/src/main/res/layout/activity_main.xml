@@ -31,6 +31,8 @@
     <Button android:id="@+id/pairAdb" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Pair Wireless Debugging" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/startAudioDaemon" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Start Shell Audio Engine" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/shellAudioSelfTest" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Test Shell VOICE_CALL Stream" android:layout_marginTop="8dp"/>
+    <Button android:id="@+id/proofCallAudio" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Capture 10s Digital Call Proof" android:layout_marginTop="8dp"/>
+    <Button android:id="@+id/playCallProof" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Play Captured Call Proof" android:enabled="false" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/audioSelfTest" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Run Call Audio Self-Test" android:layout_marginTop="8dp"/>
     <TextView android:id="@+id/audioState" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Audio engine: not tested" android:layout_marginTop="8dp"/>
 
