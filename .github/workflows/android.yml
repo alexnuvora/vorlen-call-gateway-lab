@@ -15,6 +15,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
+      - name: Fetch pinned JemRec shell audio source
+        run: |
+          git clone https://github.com/jemcik/JemRec.git third_party/JemRec
+          git -C third_party/JemRec checkout 25ad00e17e96de0cc3804dc575e543294fdb885e
+      - name: Preserve shell audio provenance
+        run: |
+          test -f third_party/JemRec/shellserver/LICENSE-scrcpy
+          test -f LICENSE-JEMREC-APACHE-2.0
       - run: gradle assembleDebug
       - uses: actions/upload-artifact@v4
         with:
