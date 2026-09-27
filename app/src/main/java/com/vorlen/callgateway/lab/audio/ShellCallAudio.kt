@@ -123,7 +123,8 @@ object ShellCallAudio {
                 "dumpsys audio | sed -n '/Audio mode:/,/Audio routes:/p'",
                 "dumpsys audio | sed -n '/Audio routes:/,/Audio policies:/p' | head -n 100",
                 "dumpsys media.audio_flinger | grep -iE 'Output thread|Input thread|device|active tracks|session|voice|call|telephony' | head -n 220",
-                "dumpsys media.audio_policy | grep -iE 'Phone state|phone state|Output|Input|Device|Route|Mix|voice|call|telephony' | head -n 260"
+                "dumpsys media.audio_policy | grep -iE 'incall|in.call|voice_tx|voice tx|voice_rx|voice rx|telephony|AUDIO_OUTPUT_FLAG_INCALL_MUSIC|0x4000|mixport|mix port' | head -n 240",
+                "grep -RinE 'incall_music|INCALL_MUSIC|voice_tx|voice_rx' /vendor/etc/audio* /vendor/etc/*audio* /odm/etc/audio* /odm/etc/*audio* 2>/dev/null | head -n 160"
             )
             val sections = mutableListOf<String>()
             for (cmd in commands) {
