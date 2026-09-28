@@ -85,12 +85,12 @@ handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
                         .setBufferSizeInBytes(Math.max(outMin, 9600)).setTransferMode(AudioTrack.MODE_STREAM).build();
                 if (!track.setPreferredDevice(telephony)) throw new IllegalStateException("Telephony Tx rejected");
 
-                os.write("READY — switch to ChatGPT Voice and make it speak for 10 seconds\n".getBytes(StandardCharsets.UTF_8)); os.flush();
+                os.write("READY — switch to ChatGPT Voice — bridge active for 60 seconds\n".getBytes(StandardCharsets.UTF_8)); os.flush();
                 record.startRecording();
                 track.play();
                 byte[] stereo = new byte[19200];
                 byte[] mono = new byte[9600];
-                long end = System.currentTimeMillis() + 10000L;
+                long end = System.currentTimeMillis() + 60000L;
                 long samples = 0, sumSq = 0;
                 int peak = 0, forwarded = 0;
                 long nonZeroSamples = 0;
