@@ -30,6 +30,7 @@ object ShellCallAudio {
     private const val DUPLEX = 68
     private const val CHATGPT_BRIDGE = 71
     private const val REVERSE_BRIDGE = 72
+    private const val LAPTOP_BRIDGE = 76
     private const val NONCE_BYTES = 16
     private const val MAC_BYTES = 32
     private val random = SecureRandom()
@@ -142,6 +143,45 @@ object ShellCallAudio {
             check(ready.startsWith("READY")) { "Streaming uplink rejected: $ready" }
             socket.soTimeout = 0
             UplinkStream(socket)
+        }
+    }
+
+    class LaptopBridgeSession internal constructor(private val socket: Socket) : java.io.Closeable {
+        private val input = java.io.DataInputStream(socket.getInputStream())
+        private val output = java.io.DataOutputStream(socket.getOutputStream())
+        @Volatile private var running = true
+
+        fun receiveCallerFrame(): ByteArray? {
+            if (!running) return null
+            return try {
+                val n = input.readInt()
+                if (n <= 0 || n > 192_000) null else ByteArray(n).also { input.readFully(it) }
+            } catch (_: Throwable) { null }
+        }
+
+        @Synchronized fun sendLaptopFrame(pcm: ByteArray) {
+            if (!running) return
+            require(pcm.isNotEmpty() && pcm.size <= 192_000)
+            output.writeInt(pcm.size); output.write(pcm); output.flush()
+        }
+
+        override fun close() {
+            running = false
+            runCatching { output.writeInt(0); output.flush() }
+            runCatching { socket.close() }
+        }
+    }
+
+    suspend fun openLaptopBridge(context: Context): Result<LaptopBridgeSession> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
+            bootstrap(context).getOrThrow()
+            val socket = open(context, LAPTOP_BRIDGE.toByte())
+            socket.soTimeout = 10_000
+            val ready = socket.getInputStream().bufferedReader().readLine() ?: error("No laptop bridge response")
+            check(ready.startsWith("READY")) { "Laptop bridge rejected: $ready" }
+            socket.soTimeout = 0
+            LaptopBridgeSession(socket)
         }
     }
 
