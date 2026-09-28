@@ -87,10 +87,10 @@ handler=r'''        if (command == COMMAND_REVERSE_BRIDGE) {
 
                 os.write("READY — REVERSE BRIDGE active for 60 seconds; remote caller speak to ChatGPT\n".getBytes(StandardCharsets.UTF_8));
                 os.flush();
-                rx.startRecording(); inject.play();
-                // Keep a short warm-up so an already-running ChatGPT VOICE_COMMUNICATION
-                // recorder can attach to the newly registered policy mix before PCM arrives.
+                // Start the injection endpoint before taking the cellular receive capture.
+                inject.play();
                 Thread.sleep(250);
+                rx.startRecording();
                 byte[] pcm = new byte[1920];
                 long end = System.currentTimeMillis() + 60000L;
                 long samples=0,sumSq=0,nonZero=0; int peak=0,reads=0,errors=0,written=0;
