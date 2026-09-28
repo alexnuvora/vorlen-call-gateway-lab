@@ -36,7 +36,7 @@ handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
                 final int rate=48000;
                 int min=AudioRecord.getMinBufferSize(rate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT);
                 rx=new AudioRecord(MediaRecorder.AudioSource.VOICE_CALL,rate,AudioFormat.CHANNEL_IN_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT,Math.max(min,9600));
+                        AudioFormat.ENCODING_PCM_16BIT,Math.max(min,3840));
                 if(rx.getState()!=AudioRecord.STATE_INITIALIZED) throw new IllegalStateException("VOICE_CALL RX not initialized");
                 rx.setPreferredDevice(telephonyRx);
 
@@ -60,7 +60,7 @@ handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
                 rx.startRecording(); tx.play();
 
                 Thread down=new Thread(new Runnable(){ public void run(){
-                    byte[] b=new byte[1920];
+                    byte[] b=new byte[960];
                     try {
                         while(running.get()){
                             int n=frx.read(b,0,b.length,AudioRecord.READ_BLOCKING);
