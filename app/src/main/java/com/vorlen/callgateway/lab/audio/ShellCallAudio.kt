@@ -209,7 +209,9 @@ object ShellCallAudio {
             if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
             val commands = listOf(
                 "AUDIO MODE + OWNERS" to "dumpsys audio | grep -iE 'Audio mode|mode owner|communication|voice|record|playback' | head -n 180",
-                "ACTIVE RECORD CLIENTS" to "dumpsys media.audio_flinger | grep -iE -B6 -A14 'Record Thread|RecordTrack|Active Tracks|session|uid|source|input' | head -n 260",
+                "ACTIVE RECORD CLIENTS" to "dumpsys media.audio_flinger | grep -iE -B10 -A20 'Record Thread|RecordTrack|Active Tracks|session|uid|source|input|com.openai.chatgpt' | head -n 420",
+                "RECORDING CONFIGURATIONS" to "dumpsys audio | grep -iE -B8 -A18 'recording|AudioRecordingConfiguration|client.*source|device|session|uid|com.openai.chatgpt' | head -n 420",
+                "CHATGPT UID RECORD MAP" to "uid=$(dumpsys package com.openai.chatgpt 2>/dev/null | sed -n 's/.*userId=//p' | head -1); echo CHATGPT_UID=$uid; dumpsys media.audio_policy | grep -iE -B12 -A24 \"uid[ :=]+$uid|session|source|input|device|remote.submix|telephony\" | head -n 520",
                 "ACTIVE PLAYBACK CLIENTS" to "dumpsys media.audio_flinger | grep -iE -B6 -A14 'Playback Thread|Track|Active Tracks|session|uid|usage|output' | head -n 320",
                 "POLICY INPUTS OUTPUTS" to "dumpsys media.audio_policy | grep -iE -B5 -A12 'Input|Output|active|session|uid|source|usage|remote.submix|telephony|voice' | head -n 420",
                 "REMOTE SUBMIX + PATCHES" to "dumpsys media.audio_policy | grep -iE -B8 -A18 'remote.submix|AUDIO_DEVICE_(IN|OUT)_REMOTE_SUBMIX|audio patch|patches|mix port|mixport' | head -n 300",
@@ -223,7 +225,7 @@ object ShellCallAudio {
             }
             val report = sections.joinToString("\n\n")
             File(context.cacheDir, "vorlen_chatgpt_voice_probe.txt").writeText(report)
-            TestResult(true, "CHATGPT VOICE LIVE AUDIO PROBE\nRun while ChatGPT Voice is actively speaking/listening.\n\n$report")
+            TestResult(true, "CHATGPT VOICE LIVE AUDIO PROBE\nIMPORTANT: start ChatGPT Voice first and leave it actively LISTENING, then run this probe.\nThe CHATGPT UID RECORD MAP and RECORDING CONFIGURATIONS sections identify the recorder source/input/device we must target.\n\n$report")
         }.getOrElse { TestResult(false, "CHATGPT VOICE PROBE FAILED — " + (it.message ?: it.javaClass.simpleName)) }
     }
 
