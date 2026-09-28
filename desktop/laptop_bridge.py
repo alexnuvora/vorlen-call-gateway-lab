@@ -27,7 +27,7 @@ CHANNELS = 1
 INPUT_CHANNELS = 2
 DTYPE = "int16"
 SAMPLE_BYTES = 2
-FRAMES = 960
+FRAMES = 480                 # 10 ms packets: lower caller->ChatGPT latency
 FRAME_BYTES = FRAMES * SAMPLE_BYTES
 INPUT_FRAME_BYTES = FRAMES * INPUT_CHANNELS * SAMPLE_BYTES
 MAGIC = b"VOR1"
@@ -77,7 +77,7 @@ def validate_audio(input_dev, output_dev):
     print("Input :", device_description(input_dev, "input"))
     print("Output:", device_description(output_dev, "output"))
     print(f"Capture: {RATE} Hz, stereo PCM16 ({INPUT_CHANNELS}ch); explicit L/R -> mono downmix")
-    print(f"Wire   : {RATE} Hz, mono, signed PCM16, {FRAMES} frames/{FRAME_BYTES} bytes per 20 ms")
+    print(f"Wire   : {RATE} Hz, mono, signed PCM16, {FRAMES} frames/{FRAME_BYTES} bytes per 10 ms")
 
 
 def stereo_to_mono_pcm16(pcm):
@@ -103,7 +103,7 @@ def rms_dbfs(pcm):
 
 
 def handle(conn, input_dev, output_dev):
-    # Voice PCM is sent in 20 ms packets. Disable Nagle so a short packet is never
+    # Voice PCM is sent in 10 ms packets. Disable Nagle so a short packet is never
     # held waiting for a previous ACK; latency matters more than throughput here.
     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     print("Phone connected:", conn.getpeername(), "TCP_NODELAY=1")
