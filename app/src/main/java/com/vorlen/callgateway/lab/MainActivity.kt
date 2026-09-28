@@ -173,19 +173,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.startLaptopBridge).setOnClickListener {
-            if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
-                audioState.text = "LAPTOP BRIDGE BLOCKED — no active cellular call"
+            // PhoneStateListener can report IDLE on some Samsung/One UI builds even
+            // while the cellular audio route is active. The shell daemon performs the
+            // authoritative MODE_IN_CALL check and fails closed when there is no call.
+            val host = findViewById<EditText>(R.id.laptopIp).text.toString().trim()
+            val port = findViewById<EditText>(R.id.laptopPort).text.toString().toIntOrNull() ?: 28761
+            if (host.isBlank()) {
+                audioState.text = "Enter the laptop LAN IP address"
             } else {
-                val host = findViewById<EditText>(R.id.laptopIp).text.toString().trim()
-                val port = findViewById<EditText>(R.id.laptopPort).text.toString().toIntOrNull() ?: 28761
-                if (host.isBlank()) {
-                    audioState.text = "Enter the laptop LAN IP address"
-                } else {
-                    audioState.text = "LAPTOP BRIDGE — connecting to $host:$port…"
-                    outboundIo.execute {
-                        val result = runBlocking { ShellCallAudio.runLaptopNetworkBridge(this@MainActivity, host, port) }
-                        runOnUiThread { audioState.text = result.report }
-                    }
+                audioState.text = "LAPTOP BRIDGE — checking cellular audio route and connecting to $host:$port…"
+                outboundIo.execute {
+                    val result = runBlocking { ShellCallAudio.runLaptopNetworkBridge(this@MainActivity, host, port) }
+                    runOnUiThread { audioState.text = result.report }
                 }
             }
         }
@@ -197,8 +196,7 @@ class MainActivity : AppCompatActivity() {
                 audioState.text = "Bridge armed for 60 seconds. Switch to ChatGPT Voice NOW and make ChatGPT speak."
                 outboundIo.execute {
                     val result = runBlocking { ShellCallAudio.chatGptToCallBridge(this@MainActivity) }
-                    runOnUiThread { audioState.text = result.report }
-                }
+                    runOnUiThread { audioState.text = result.report }                }
             }
         }
 
@@ -397,8 +395,7 @@ class MainActivity : AppCompatActivity() {
                             else "Expected on modern Android: normal app UID cannot prove digital call capture. Shell-daemon test is the next stage."
                         )
                     }
-                }
-            }
+                }            }
         }
 
         findViewById<Button>(R.id.approveSession).setOnClickListener {
@@ -597,8 +594,7 @@ class MainActivity : AppCompatActivity() {
         c.outputStream.use { it.write(JSONObject().put("id", id).put("status", state).put("kind", kind).put("error", error).toString().toByteArray()) }
         val code = c.responseCode
         if (code in 200..299) c.inputStream.close() else c.errorStream?.close()
-        c.disconnect()
-        if (code !in 200..299) throw IllegalStateException("Ack HTTP " + code)
+        c.disconnect()        if (code !in 200..299) throw IllegalStateException("Ack HTTP " + code)
     }
 
     private fun sendEvent(eventType: String, callState: String, requestId: String?) {
