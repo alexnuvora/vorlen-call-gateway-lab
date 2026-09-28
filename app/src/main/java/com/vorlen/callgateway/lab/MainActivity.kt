@@ -595,7 +595,8 @@ class MainActivity : AppCompatActivity() {
         c.disconnect()\n        if (code !in 200..299) throw IllegalStateException("Ack HTTP " + code)
     }
 
-    private fun sendEvent(eventType: String, callState: String, requestId: String?) {        val token = getSharedPreferences("gateway", MODE_PRIVATE).getString("device_token", null) ?: return
+    private fun sendEvent(eventType: String, callState: String, requestId: String?) {
+        val token = getSharedPreferences("gateway", MODE_PRIVATE).getString("device_token", null) ?: return
         if (outboundIo.isShutdown) return
         outboundIo.execute {
             try {
