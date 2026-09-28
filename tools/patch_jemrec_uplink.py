@@ -53,7 +53,13 @@ handler=r'''        if (command == COMMAND_REVERSE_BRIDGE) {
                 }
                 AudioAttributes capture = ab.build();
                 // RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET = 2
-                rbc.getMethod("addMixRule", AudioAttributes.class, int.class).invoke(rb, capture, 2);
+                try {
+                    // Public Android builds commonly expose addRule(AudioAttributes, int);
+                    // some branches name the equivalent helper addMixRule. Support both.
+                    rbc.getMethod("addRule", AudioAttributes.class, int.class).invoke(rb, capture, 2);
+                } catch (NoSuchMethodException noAddRule) {
+                    rbc.getMethod("addMixRule", AudioAttributes.class, int.class).invoke(rb, capture, 2);
+                }
                 Object rule = rbc.getMethod("build").invoke(rb);
                 Class<?> rc = Class.forName("android.media.audiopolicy.AudioMixingRule");
                 Class<?> mbc = Class.forName("android.media.audiopolicy.AudioMix$Builder");
