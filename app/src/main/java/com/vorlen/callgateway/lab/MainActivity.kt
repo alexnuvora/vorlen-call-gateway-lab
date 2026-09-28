@@ -183,7 +183,13 @@ class MainActivity : AppCompatActivity() {
             } else {
                 audioState.text = "LAPTOP BRIDGE — checking cellular audio route and connecting to $host:$port…"
                 outboundIo.execute {
-                    val result = runBlocking { ShellCallAudio.runLaptopNetworkBridge(this@MainActivity, host, port) }
+                    val result = runBlocking {
+                        ShellCallAudio.runLaptopNetworkBridge(this@MainActivity, host, port) { ready ->
+                            runOnUiThread {
+                                audioState.text = "LAPTOP BRIDGE ACTIVE\n\nTELEPHONY DIAGNOSTICS\n$ready\n\nKeep this screen open or take a screenshot. These are the actual shell Telephony TX parameters."
+                            }
+                        }
+                    }
                     runOnUiThread { audioState.text = result.report }
                 }
             }
