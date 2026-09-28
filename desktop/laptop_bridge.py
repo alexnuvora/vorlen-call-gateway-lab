@@ -10,6 +10,7 @@ Usage:
 """
 import argparse
 import audioop
+from array import array
 import math
 import socket
 import struct
@@ -23,10 +24,12 @@ except ImportError:
 
 RATE = 48000
 CHANNELS = 1
+INPUT_CHANNELS = 2          # capture virtual cable natively; downmix ourselves
 DTYPE = "int16"
 SAMPLE_BYTES = 2
 FRAMES = 960                 # exactly 20 ms at 48 kHz
 FRAME_BYTES = FRAMES * SAMPLE_BYTES
+INPUT_FRAME_BYTES = FRAMES * INPUT_CHANNELS * SAMPLE_BYTES
 MAGIC = b"VOR1"
 
 
@@ -71,11 +74,32 @@ def device_description(device, kind):
 
 def validate_audio(input_dev, output_dev):
     # Fail before accepting audio if PortAudio cannot provide the exact wire format.
-    sd.check_input_settings(device=input_dev, channels=CHANNELS, dtype=DTYPE, samplerate=RATE)
+    sd.check_input_settings(device=input_dev, channels=INPUT_CHANNELS, dtype=DTYPE, samplerate=RATE)
     sd.check_output_settings(device=output_dev, channels=CHANNELS, dtype=DTYPE, samplerate=RATE)
     print("Input :", device_description(input_dev, "input"))
     print("Output:", device_description(output_dev, "output"))
-    print(f"Wire  : {RATE} Hz, mono, signed PCM16, {FRAMES} frames/{FRAME_BYTES} bytes per 20 ms")
+    print(f"Capture: {RATE} Hz, stereo PCM16 ({INPUT_CHANNELS}ch); explicit L/R -> mono downmix")
+    print(f"Wire   : {RATE} Hz, mono, signed PCM16, {FRAMES} frames/{FRAME_BYTES} bytes per 20 ms")
+
+
+def stereo_to_mono_pcm16(pcm):
+    """Downmix interleaved little-endian stereo PCM16 to mono without changing sample rate."""
+    if len(pcm) != INPUT_FRAME_BYTES:
+        raise RuntimeError(
+            f"stereo capture frame size mismatch: got {len(pcm)} bytes, expected {INPUT_FRAME_BYTES}"
+        )
+    samples = array("h")
+    samples.frombytes(pcm)
+    # Windows is little-endian, matching PCM16 from PortAudio.
+    mono = array("h", [0]) * FRAMES
+    j = 0
+    for i in range(FRAMES):
+        left = samples[j]
+        right = samples[j + 1]
+        # Average in Python int space to avoid int16 overflow.
+        mono[i] = (left + right) // 2
+        j += 2
+    return mono.tobytes()
 
 
 def rms_dbfs(pcm):
@@ -108,7 +132,7 @@ def handle(conn, input_dev, output_dev):
         blocksize=FRAMES, device=output_dev, latency="low"
     )
     inp = sd.RawInputStream(
-        samplerate=RATE, channels=CHANNELS, dtype=DTYPE,
+        samplerate=RATE, channels=INPUT_CHANNELS, dtype=DTYPE,
         blocksize=FRAMES, device=input_dev, latency="low"
     )
     out.start()
@@ -171,10 +195,11 @@ def handle(conn, input_dev, output_dev):
     try:
         while not stop.is_set():
             data, overflow = inp.read(FRAMES)
-            payload = bytes(data)
+            stereo = bytes(data)
+            payload = stereo_to_mono_pcm16(stereo)
             if len(payload) != FRAME_BYTES:
                 raise RuntimeError(
-                    f"capture frame size mismatch: got {len(payload)} bytes, expected {FRAME_BYTES}"
+                    f"downmix frame size mismatch: got {len(payload)} bytes, expected {FRAME_BYTES}"
                 )
             with stats_lock:
                 stats["tx_frames"] += 1
