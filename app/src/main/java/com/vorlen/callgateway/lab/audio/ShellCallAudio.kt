@@ -29,6 +29,7 @@ object ShellCallAudio {
     private const val UPLINK_PCM = 84
     private const val DUPLEX = 68
     private const val CHATGPT_BRIDGE = 71
+    private const val REVERSE_BRIDGE = 72
     private const val NONCE_BYTES = 16
     private const val MAC_BYTES = 32
     private val random = SecureRandom()
@@ -142,6 +143,21 @@ object ShellCallAudio {
             socket.soTimeout = 0
             UplinkStream(socket)
         }
+    }
+
+    suspend fun callToChatGptBridge(context: Context): TestResult = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
+            bootstrap(context).getOrThrow()
+            open(context, REVERSE_BRIDGE.toByte()).use { socket ->
+                socket.soTimeout = 70_000
+                val reader = socket.getInputStream().bufferedReader()
+                val ready = reader.readLine() ?: error("No reverse bridge response")
+                if (!ready.startsWith("READY")) return@use TestResult(false, "CALL → CHATGPT BRIDGE — " + ready)
+                val result = reader.readLine() ?: "No completion response"
+                TestResult(result.startsWith("COMPLETE"), "CALL → CHATGPT BRIDGE\n" + ready + "\n" + result)
+            }
+        }.getOrElse { TestResult(false, "CALL → CHATGPT BRIDGE FAILED — " + (it.message ?: it.javaClass.simpleName)) }
     }
 
     suspend fun chatGptToCallBridge(context: Context): TestResult = withContext(Dispatchers.IO) {
