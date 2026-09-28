@@ -176,9 +176,21 @@ class MainActivity : AppCompatActivity() {
             if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
                 audioState.text = "CHATGPT → CALL BRIDGE BLOCKED — no active cellular call"
             } else {
-                audioState.text = "Bridge armed for 10 seconds. Switch to ChatGPT Voice NOW and make ChatGPT speak."
+                audioState.text = "Bridge armed for 60 seconds. Switch to ChatGPT Voice NOW and make ChatGPT speak."
                 outboundIo.execute {
                     val result = runBlocking { ShellCallAudio.chatGptToCallBridge(this@MainActivity) }
+                    runOnUiThread { audioState.text = result.report }
+                }
+            }
+        }
+
+        findViewById<Button>(R.id.testCallToChatGptBridge).setOnClickListener {
+            if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
+                audioState.text = "CALL → CHATGPT BRIDGE BLOCKED — no active cellular call"
+            } else {
+                audioState.text = "Reverse bridge armed for 60 seconds. Switch to ChatGPT Voice; ask the remote caller to speak."
+                outboundIo.execute {
+                    val result = runBlocking { ShellCallAudio.callToChatGptBridge(this@MainActivity) }
                     runOnUiThread { audioState.text = result.report }
                 }
             }
