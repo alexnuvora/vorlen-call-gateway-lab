@@ -24,10 +24,10 @@ except ImportError:
 
 RATE = 48000
 CHANNELS = 1
-INPUT_CHANNELS = 2          # capture virtual cable natively; downmix ourselves
+INPUT_CHANNELS = 2
 DTYPE = "int16"
 SAMPLE_BYTES = 2
-FRAMES = 960                 # exactly 20 ms at 48 kHz
+FRAMES = 960
 FRAME_BYTES = FRAMES * SAMPLE_BYTES
 INPUT_FRAME_BYTES = FRAMES * INPUT_CHANNELS * SAMPLE_BYTES
 MAGIC = b"VOR1"
@@ -49,7 +49,6 @@ def send_frame(sock, payload, lock):
 
 
 def resolve_device(value, kind):
-    """Treat an all-digit CLI value as a PortAudio device index; otherwise use its name."""
     if isinstance(value, str) and value.strip().isdigit():
         index = int(value.strip())
         devices = sd.query_devices()
@@ -73,7 +72,6 @@ def device_description(device, kind):
 
 
 def validate_audio(input_dev, output_dev):
-    # Fail before accepting audio if PortAudio cannot provide the exact wire format.
     sd.check_input_settings(device=input_dev, channels=INPUT_CHANNELS, dtype=DTYPE, samplerate=RATE)
     sd.check_output_settings(device=output_dev, channels=CHANNELS, dtype=DTYPE, samplerate=RATE)
     print("Input :", device_description(input_dev, "input"))
@@ -83,21 +81,14 @@ def validate_audio(input_dev, output_dev):
 
 
 def stereo_to_mono_pcm16(pcm):
-    """Downmix interleaved little-endian stereo PCM16 to mono without changing sample rate."""
     if len(pcm) != INPUT_FRAME_BYTES:
-        raise RuntimeError(
-            f"stereo capture frame size mismatch: got {len(pcm)} bytes, expected {INPUT_FRAME_BYTES}"
-        )
+        raise RuntimeError(f"stereo capture frame size mismatch: got {len(pcm)} bytes, expected {INPUT_FRAME_BYTES}")
     samples = array("h")
     samples.frombytes(pcm)
-    # Windows is little-endian, matching PCM16 from PortAudio.
     mono = array("h", [0]) * FRAMES
     j = 0
     for i in range(FRAMES):
-        left = samples[j]
-        right = samples[j + 1]
-        # Average in Python int space to avoid int16 overflow.
-        mono[i] = (left + right) // 2
+        mono[i] = (samples[j] + samples[j + 1]) // 2
         j += 2
     return mono.tobytes()
 
@@ -112,7 +103,10 @@ def rms_dbfs(pcm):
 
 
 def handle(conn, input_dev, output_dev):
-    print("Phone connected:", conn.getpeername())
+    # Voice PCM is sent in 20 ms packets. Disable Nagle so a short packet is never
+    # held waiting for a previous ACK; latency matters more than throughput here.
+    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    print("Phone connected:", conn.getpeername(), "TCP_NODELAY=1")
     if recvall(conn, 4) != MAGIC:
         raise ConnectionError("bad handshake")
     conn.sendall(MAGIC)
@@ -125,28 +119,16 @@ def handle(conn, input_dev, output_dev):
         "rx_frames": 0, "rx_bytes": 0, "rx_db": -120.0,
     }
 
-    # Raw streams prevent NumPy/float conversion. The requested format is explicit:
-    # 48,000 samples/s, one channel, signed 16-bit PCM.
-    out = sd.RawOutputStream(
-        samplerate=RATE, channels=CHANNELS, dtype=DTYPE,
-        blocksize=FRAMES, device=output_dev, latency="low"
-    )
-    inp = sd.RawInputStream(
-        samplerate=RATE, channels=INPUT_CHANNELS, dtype=DTYPE,
-        blocksize=FRAMES, device=input_dev, latency="low"
-    )
+    out = sd.RawOutputStream(samplerate=RATE, channels=CHANNELS, dtype=DTYPE,
+                             blocksize=FRAMES, device=output_dev, latency="low")
+    inp = sd.RawInputStream(samplerate=RATE, channels=INPUT_CHANNELS, dtype=DTYPE,
+                            blocksize=FRAMES, device=input_dev, latency="low")
     out.start()
     inp.start()
 
-    # Report the rates PortAudio actually opened, not merely what was requested.
     if abs(float(inp.samplerate) - RATE) > 1 or abs(float(out.samplerate) - RATE) > 1:
-        raise RuntimeError(
-            f"PortAudio rate mismatch: input={inp.samplerate}, output={out.samplerate}, expected={RATE}"
-        )
-    print(
-        f"Audio ready: input={input_dev} @ {inp.samplerate:.0f} Hz, "
-        f"output={output_dev} @ {out.samplerate:.0f} Hz; full-duplex bridge active"
-    )
+        raise RuntimeError(f"PortAudio rate mismatch: input={inp.samplerate}, output={out.samplerate}, expected={RATE}")
+    print(f"Audio ready: input={input_dev} @ {inp.samplerate:.0f} Hz, output={output_dev} @ {out.samplerate:.0f} Hz; full-duplex low-latency bridge active")
 
     def rx():
         try:
@@ -157,7 +139,6 @@ def handle(conn, input_dev, output_dev):
                 if not n:
                     continue
                 payload = recvall(conn, n)
-                # Android should send mono PCM16; reject malformed partial samples.
                 if len(payload) % SAMPLE_BYTES:
                     raise ConnectionError(f"unaligned caller PCM frame: {len(payload)} bytes")
                 out.write(payload)
@@ -180,13 +161,9 @@ def handle(conn, input_dev, output_dev):
                 txb, rxb = stats["tx_bytes"], stats["rx_bytes"]
                 txdb, rxdb = stats["tx_db"], stats["rx_db"]
                 ov = stats["tx_overflows"]
-            # PCM bytes/sec -> samples/sec because mono PCM16 = 2 bytes/sample.
             tx_rate = (txb - last_tx) / SAMPLE_BYTES / elapsed
             rx_rate = (rxb - last_rx) / SAMPLE_BYTES / elapsed
-            print(
-                f"AUDIO tx={tx_rate:.0f} samp/s {txdb:.1f} dBFS "
-                f"rx={rx_rate:.0f} samp/s {rxdb:.1f} dBFS overflows={ov}"
-            )
+            print(f"AUDIO tx={tx_rate:.0f} samp/s {txdb:.1f} dBFS rx={rx_rate:.0f} samp/s {rxdb:.1f} dBFS overflows={ov}")
             last_tx, last_rx, last_t = txb, rxb, now
 
     threading.Thread(target=rx, daemon=True).start()
@@ -195,12 +172,9 @@ def handle(conn, input_dev, output_dev):
     try:
         while not stop.is_set():
             data, overflow = inp.read(FRAMES)
-            stereo = bytes(data)
-            payload = stereo_to_mono_pcm16(stereo)
+            payload = stereo_to_mono_pcm16(bytes(data))
             if len(payload) != FRAME_BYTES:
-                raise RuntimeError(
-                    f"downmix frame size mismatch: got {len(payload)} bytes, expected {FRAME_BYTES}"
-                )
+                raise RuntimeError(f"downmix frame size mismatch: got {len(payload)} bytes, expected {FRAME_BYTES}")
             with stats_lock:
                 stats["tx_frames"] += 1
                 stats["tx_bytes"] += len(payload)
