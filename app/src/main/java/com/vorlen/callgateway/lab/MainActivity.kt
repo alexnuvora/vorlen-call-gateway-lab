@@ -197,8 +197,7 @@ class MainActivity : AppCompatActivity() {
                 outboundIo.execute {
                     val result = runBlocking { ShellCallAudio.chatGptToCallBridge(this@MainActivity) }
                     runOnUiThread { audioState.text = result.report }                }
-            }
-        }
+            }        }
 
         findViewById<Button>(R.id.testCallToChatGptBridge).setOnClickListener {
             if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
@@ -397,7 +396,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 }            }
         }
-
         findViewById<Button>(R.id.approveSession).setOnClickListener {
             sessionApproved = !sessionApproved
             if (sessionApproved) {
@@ -594,11 +592,10 @@ class MainActivity : AppCompatActivity() {
         c.outputStream.use { it.write(JSONObject().put("id", id).put("status", state).put("kind", kind).put("error", error).toString().toByteArray()) }
         val code = c.responseCode
         if (code in 200..299) c.inputStream.close() else c.errorStream?.close()
-        c.disconnect()        if (code !in 200..299) throw IllegalStateException("Ack HTTP " + code)
+        c.disconnect()\n        if (code !in 200..299) throw IllegalStateException("Ack HTTP " + code)
     }
 
-    private fun sendEvent(eventType: String, callState: String, requestId: String?) {
-        val token = getSharedPreferences("gateway", MODE_PRIVATE).getString("device_token", null) ?: return
+    private fun sendEvent(eventType: String, callState: String, requestId: String?) {        val token = getSharedPreferences("gateway", MODE_PRIVATE).getString("device_token", null) ?: return
         if (outboundIo.isShutdown) return
         outboundIo.execute {
             try {
