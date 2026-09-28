@@ -34,6 +34,11 @@ handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
                 if (telephonyRx == null || telephonyTx == null) throw new IllegalStateException("Telephony RX/TX unavailable");
 
                 final int rate=48000;
+                // Cellular uplink is voice-band. Keep network/RX at 48 kHz, but feed
+                // Telephony TX at 16 kHz after an explicit 3:1 downsample. Some Samsung
+                // telephony routes advertise/accept 48 kHz AudioTrack while consuming the
+                // PCM at the modem voice clock, which produces a severely slowed/deep voice.
+                final int txRate=16000;
                 int min=AudioRecord.getMinBufferSize(rate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT);
                 rx=new AudioRecord(MediaRecorder.AudioSource.VOICE_CALL,rate,AudioFormat.CHANNEL_IN_MONO,
                         AudioFormat.ENCODING_PCM_16BIT,Math.max(min,9600));
@@ -43,13 +48,13 @@ handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
                 AudioAttributes attrs=new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
                 AudioFormat fmt=new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build();
-                int outMin=AudioTrack.getMinBufferSize(rate,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT);
+                        .setSampleRate(txRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build();
+                int outMin=AudioTrack.getMinBufferSize(txRate,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT);
                 tx=new AudioTrack.Builder().setAudioAttributes(attrs).setAudioFormat(fmt)
                         .setBufferSizeInBytes(Math.max(outMin,9600)).setTransferMode(AudioTrack.MODE_STREAM).build();
                 if(!tx.setPreferredDevice(telephonyTx)) throw new IllegalStateException("Telephony TX rejected");
 
-                os.write("READY 48000 PCM16 MONO FULL_DUPLEX\n".getBytes(StandardCharsets.UTF_8)); os.flush();
+                os.write("READY RX=48000 TX=16000 PCM16 MONO FULL_DUPLEX\n".getBytes(StandardCharsets.UTF_8)); os.flush();
                 final AudioRecord frx=rx; final AudioTrack ftx=tx;
                 final java.util.concurrent.atomic.AtomicBoolean running=new java.util.concurrent.atomic.AtomicBoolean(true);
                 final java.util.concurrent.atomic.AtomicReference<Throwable> pumpError=new java.util.concurrent.atomic.AtomicReference<Throwable>();
@@ -74,9 +79,25 @@ handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
                     if(n==0) break;
                     if(n<0 || n>192000) throw new IllegalArgumentException("laptop frame "+n);
                     byte[] b=new byte[n]; din.readFully(b);
+                    if ((n & 1) != 0) throw new IllegalArgumentException("unaligned PCM frame "+n);
+                    // 48 kHz mono PCM16 -> 16 kHz mono PCM16. Average each group of
+                    // three samples instead of dropping two samples; this provides a small
+                    // anti-aliasing low-pass and, critically, preserves wall-clock duration.
+                    int inSamples=n/2;
+                    int outSamples=inSamples/3;
+                    byte[] voice=new byte[outSamples*2];
+                    for(int i=0;i<outSamples;i++){
+                        int p=i*6;
+                        short s0=(short)((b[p]&255)|(b[p+1]<<8));
+                        short s1=(short)((b[p+2]&255)|(b[p+3]<<8));
+                        short s2=(short)((b[p+4]&255)|(b[p+5]<<8));
+                        int v=((int)s0+(int)s1+(int)s2)/3;
+                        voice[i*2]=(byte)(v&255);
+                        voice[i*2+1]=(byte)((v>>>8)&255);
+                    }
                     int off=0;
-                    while(off<n){
-                        int w=tx.write(b,off,Math.min(1920,n-off),AudioTrack.WRITE_BLOCKING);
+                    while(off<voice.length){
+                        int w=tx.write(voice,off,Math.min(640,voice.length-off),AudioTrack.WRITE_BLOCKING);
                         if(w<=0) throw new IllegalStateException("Telephony TX write "+w);
                         off+=w;
                     }
