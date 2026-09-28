@@ -146,7 +146,7 @@ object ShellCallAudio {
         }
     }
 
-    suspend fun runLaptopNetworkBridge(context: Context, host: String, port: Int): TestResult = withContext(Dispatchers.IO) {
+    suspend fun runLaptopNetworkBridge(context: Context, host: String, port: Int, onReady: ((String) -> Unit)? = null): TestResult = withContext(Dispatchers.IO) {
         runCatching {
             require(host.isNotBlank()) { "Laptop IP is required" }
             require(port in 1..65535) { "Invalid laptop port" }
@@ -158,6 +158,7 @@ object ShellCallAudio {
             val shellOut = java.io.DataOutputStream(shell.getOutputStream())
             val ready = shellIn.readLine() ?: error("No cellular bridge response")
             check(ready.startsWith("READY")) { "Cellular bridge rejected: $ready" }
+            onReady?.invoke(ready)
             shell.soTimeout = 0
 
             val laptop = Socket()
