@@ -146,43 +146,62 @@ object ShellCallAudio {
         }
     }
 
-    class LaptopBridgeSession internal constructor(private val socket: Socket) : java.io.Closeable {
-        private val input = java.io.DataInputStream(socket.getInputStream())
-        private val output = java.io.DataOutputStream(socket.getOutputStream())
-        @Volatile private var running = true
-
-        fun receiveCallerFrame(): ByteArray? {
-            if (!running) return null
-            return try {
-                val n = input.readInt()
-                if (n <= 0 || n > 192_000) null else ByteArray(n).also { input.readFully(it) }
-            } catch (_: Throwable) { null }
-        }
-
-        @Synchronized fun sendLaptopFrame(pcm: ByteArray) {
-            if (!running) return
-            require(pcm.isNotEmpty() && pcm.size <= 192_000)
-            output.writeInt(pcm.size); output.write(pcm); output.flush()
-        }
-
-        override fun close() {
-            running = false
-            runCatching { output.writeInt(0); output.flush() }
-            runCatching { socket.close() }
-        }
-    }
-
-    suspend fun openLaptopBridge(context: Context): Result<LaptopBridgeSession> = withContext(Dispatchers.IO) {
+    suspend fun runLaptopNetworkBridge(context: Context, host: String, port: Int): TestResult = withContext(Dispatchers.IO) {
         runCatching {
+            require(host.isNotBlank()) { "Laptop IP is required" }
+            require(port in 1..65535) { "Invalid laptop port" }
             if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
             bootstrap(context).getOrThrow()
-            val socket = open(context, LAPTOP_BRIDGE.toByte())
-            socket.soTimeout = 10_000
-            val ready = socket.getInputStream().bufferedReader().readLine() ?: error("No laptop bridge response")
-            check(ready.startsWith("READY")) { "Laptop bridge rejected: $ready" }
-            socket.soTimeout = 0
-            LaptopBridgeSession(socket)
-        }
+            val shell = open(context, LAPTOP_BRIDGE.toByte())
+            shell.soTimeout = 10_000
+            val shellIn = java.io.DataInputStream(shell.getInputStream())
+            val shellOut = java.io.DataOutputStream(shell.getOutputStream())
+            val ready = shellIn.readLine() ?: error("No cellular bridge response")
+            check(ready.startsWith("READY")) { "Cellular bridge rejected: $ready" }
+            shell.soTimeout = 0
+
+            val laptop = Socket()
+            laptop.connect(InetSocketAddress(host, port), 5000)
+            laptop.tcpNoDelay = true
+            laptop.soTimeout = 10_000
+            val laptopIn = java.io.DataInputStream(laptop.getInputStream())
+            val laptopOut = java.io.DataOutputStream(laptop.getOutputStream())
+            laptopOut.write(byteArrayOf('V'.code.toByte(),'O'.code.toByte(),'R'.code.toByte(),'1'.code.toByte())); laptopOut.flush()
+            val ack = ByteArray(4); laptopIn.readFully(ack)
+            check(String(ack, Charsets.US_ASCII) == "VOR1") { "Laptop handshake failed" }
+            laptop.soTimeout = 0
+
+            val running = java.util.concurrent.atomic.AtomicBoolean(true)
+            val error = java.util.concurrent.atomic.AtomicReference<Throwable>()
+            val callerToLaptop = Thread({
+                try {
+                    while (running.get()) {
+                        val n = shellIn.readInt()
+                        if (n <= 0 || n > 192_000) break
+                        val pcm = ByteArray(n); shellIn.readFully(pcm)
+                        synchronized(laptopOut) { laptopOut.writeInt(n); laptopOut.write(pcm); laptopOut.flush() }
+                    }
+                } catch (t: Throwable) { error.set(t) } finally { running.set(false) }
+            }, "vorlen-caller-to-laptop")
+            callerToLaptop.start()
+
+            try {
+                while (running.get()) {
+                    val n = laptopIn.readInt()
+                    if (n <= 0 || n > 192_000) break
+                    val pcm = ByteArray(n); laptopIn.readFully(pcm)
+                    synchronized(shellOut) { shellOut.writeInt(n); shellOut.write(pcm); shellOut.flush() }
+                }
+            } finally {
+                running.set(false)
+                runCatching { shellOut.writeInt(0); shellOut.flush() }
+                runCatching { laptop.close() }
+                runCatching { shell.close() }
+                runCatching { callerToLaptop.join(1500) }
+            }
+            error.get()?.let { throw it }
+            TestResult(true, "LAPTOP BRIDGE ENDED")
+        }.getOrElse { TestResult(false, "LAPTOP BRIDGE FAILED — " + (it.message ?: it.javaClass.simpleName)) }
     }
 
     suspend fun callToChatGptBridge(context: Context): TestResult = withContext(Dispatchers.IO) {
