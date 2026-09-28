@@ -13,9 +13,89 @@ s=s.replace("private static final int COMMAND_RECORD = 'R';","""private static f
     private static final int COMMAND_UPLINK_TEST = 'U';
     private static final int COMMAND_UPLINK_PCM = 'T';
     private static final int COMMAND_DUPLEX = 'D';\n    private static final int COMMAND_CHATGPT_BRIDGE = 'G';
-    private static final int COMMAND_REVERSE_BRIDGE = 'H';""")
+    private static final int COMMAND_REVERSE_BRIDGE = 'H';\n    private static final int COMMAND_LAPTOP_BRIDGE = 'L';""")
 anchor="""        if (command == COMMAND_RECORD) {"""
-handler=r'''        if (command == COMMAND_REVERSE_BRIDGE) {
+handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
+            OutputStream os = client.getOutputStream();
+            AudioRecord rx = null;
+            AudioTrack tx = null;
+            try {
+                Context context = FakeContext.get();
+                AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+                if (am.getMode() != AudioManager.MODE_IN_CALL) {
+                    os.write(("BLOCKED mode=" + am.getMode() + " (cellular call must be active)\n").getBytes(StandardCharsets.UTF_8));
+                    os.flush(); return;
+                }
+                AudioDeviceInfo telephonyRx = null, telephonyTx = null;
+                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_INPUTS))
+                    if (d.getType() == AudioDeviceInfo.TYPE_TELEPHONY) telephonyRx = d;
+                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS))
+                    if (d.getType() == AudioDeviceInfo.TYPE_TELEPHONY) telephonyTx = d;
+                if (telephonyRx == null || telephonyTx == null) throw new IllegalStateException("Telephony RX/TX unavailable");
+
+                final int rate=48000;
+                int min=AudioRecord.getMinBufferSize(rate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT);
+                rx=new AudioRecord(MediaRecorder.AudioSource.VOICE_CALL,rate,AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,Math.max(min,9600));
+                if(rx.getState()!=AudioRecord.STATE_INITIALIZED) throw new IllegalStateException("VOICE_CALL RX not initialized");
+                rx.setPreferredDevice(telephonyRx);
+
+                AudioAttributes attrs=new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
+                AudioFormat fmt=new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build();
+                int outMin=AudioTrack.getMinBufferSize(rate,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT);
+                tx=new AudioTrack.Builder().setAudioAttributes(attrs).setAudioFormat(fmt)
+                        .setBufferSizeInBytes(Math.max(outMin,9600)).setTransferMode(AudioTrack.MODE_STREAM).build();
+                if(!tx.setPreferredDevice(telephonyTx)) throw new IllegalStateException("Telephony TX rejected");
+
+                os.write("READY 48000 PCM16 MONO FULL_DUPLEX\n".getBytes(StandardCharsets.UTF_8)); os.flush();
+                final AudioRecord frx=rx; final AudioTrack ftx=tx;
+                final java.util.concurrent.atomic.AtomicBoolean running=new java.util.concurrent.atomic.AtomicBoolean(true);
+                final java.util.concurrent.atomic.AtomicReference<Throwable> pumpError=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+                rx.startRecording(); tx.play();
+
+                Thread down=new Thread(new Runnable(){ public void run(){
+                    byte[] b=new byte[1920];
+                    try {
+                        while(running.get()){
+                            int n=frx.read(b,0,b.length,AudioRecord.READ_BLOCKING);
+                            if(n<=0) continue;
+                            synchronized(os){ os.write(new byte[]{(byte)(n>>>24),(byte)(n>>>16),(byte)(n>>>8),(byte)n}); os.write(b,0,n); os.flush(); }
+                        }
+                    } catch(Throwable t){ pumpError.set(t); running.set(false); }
+                }}, "vorlen-call-rx");
+                down.start();
+
+                DataInputStream din=new DataInputStream(client.getInputStream());
+                while(running.get()){
+                    int n;
+                    try { n=din.readInt(); } catch(EOFException eof){ break; }
+                    if(n==0) break;
+                    if(n<0 || n>192000) throw new IllegalArgumentException("laptop frame "+n);
+                    byte[] b=new byte[n]; din.readFully(b);
+                    int off=0;
+                    while(off<n){
+                        int w=tx.write(b,off,Math.min(1920,n-off),AudioTrack.WRITE_BLOCKING);
+                        if(w<=0) throw new IllegalStateException("Telephony TX write "+w);
+                        off+=w;
+                    }
+                }
+                running.set(false);
+                try{rx.stop();}catch(Throwable ignored){}
+                try{down.join(1500);}catch(Throwable ignored){}
+                Throwable pe=pumpError.get(); if(pe!=null && !(pe instanceof java.net.SocketException)) throw pe;
+                tx.stop();
+            } catch(Throwable t) {
+                try { os.write(("FAILED "+t.getClass().getName()+": "+String.valueOf(t.getMessage())+"\n").getBytes(StandardCharsets.UTF_8)); os.flush(); } catch(Throwable ignored){}
+            } finally {
+                if(rx!=null)try{rx.release();}catch(Throwable ignored){}
+                if(tx!=null)try{tx.release();}catch(Throwable ignored){}
+            }
+            return;
+        }
+
+        if (command == COMMAND_REVERSE_BRIDGE) {
             OutputStream os = client.getOutputStream();
             AudioRecord rx = null;
             AudioTrack inject = null;
