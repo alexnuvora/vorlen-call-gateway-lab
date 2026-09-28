@@ -587,12 +587,34 @@ class MainActivity : AppCompatActivity() {
 
     private fun gatewayAck(token: String, id: String, state: String, kind: String = "request", error: String? = null) {
         val c = URL(GATEWAY_URL).openConnection() as HttpURLConnection
-        c.requestMethod = "POST"; c.doOutput = true; c.connectTimeout = 10000; c.readTimeout = 10000
-        c.setRequestProperty("Content-Type", "application/json"); c.setRequestProperty("x-device-code", DEVICE_CODE); c.setRequestProperty("x-device-token", token)
-        c.outputStream.use { it.write(JSONObject().put("id", id).put("status", state).put("kind", kind).put("error", error).toString().toByteArray()) }
+        c.requestMethod = "POST"
+        c.doOutput = true
+        c.connectTimeout = 10000
+        c.readTimeout = 10000
+        c.setRequestProperty("Content-Type", "application/json")
+        c.setRequestProperty("x-device-code", DEVICE_CODE)
+        c.setRequestProperty("x-device-token", token)
+        c.outputStream.use {
+            it.write(
+                JSONObject()
+                    .put("id", id)
+                    .put("status", state)
+                    .put("kind", kind)
+                    .put("error", error)
+                    .toString()
+                    .toByteArray()
+            )
+        }
         val code = c.responseCode
-        if (code in 200..299) c.inputStream.close() else c.errorStream?.close()
-        c.disconnect()\n        if (code !in 200..299) throw IllegalStateException("Ack HTTP " + code)
+        if (code in 200..299) {
+            c.inputStream.close()
+        } else {
+            c.errorStream?.close()
+        }
+        c.disconnect()
+        if (code !in 200..299) {
+            throw IllegalStateException("Ack HTTP " + code)
+        }
     }
 
     private fun sendEvent(eventType: String, callState: String, requestId: String?) {
