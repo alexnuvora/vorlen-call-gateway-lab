@@ -44,14 +44,17 @@ def handle(conn,input_dev,output_dev):
                            blocksize=FRAMES,device=output_dev)
     inp=sd.RawInputStream(samplerate=RATE,channels=CHANNELS,dtype=DTYPE,
                           blocksize=FRAMES,device=input_dev)
-    out.start(); inp.start()\n    print(f"Audio ready: input={input_dev}, output={output_dev}; full-duplex bridge active")
+    out.start(); inp.start()
+    print(f"Audio ready: input={input_dev}, output={output_dev}; full-duplex bridge active")
     def rx():
         try:
             while not stop.is_set():
                 n=struct.unpack("!I",recvall(conn,4))[0]
                 if n>192000: raise ConnectionError("invalid frame")
                 if n: out.write(recvall(conn,n))
-        except Exception as e:\n            print("Phone -> laptop audio failed:", repr(e))\n        finally: stop.set()
+        except Exception as e:
+            print("Phone -> laptop audio failed:", repr(e))
+        finally: stop.set()
     t=threading.Thread(target=rx,daemon=True); t.start()
     try:
         while not stop.is_set():
@@ -96,7 +99,9 @@ def main():
                 input_dev = resolve_device(a.input, "input")
                 output_dev = resolve_device(a.output, "output")
                 handle(c,input_dev,output_dev)
-            except Exception as e:\n                print("Bridge disconnected:", repr(e))\n                time.sleep(.5)
+            except Exception as e:
+                print("Bridge disconnected:", repr(e))
+                time.sleep(.5)
 
 if __name__=="__main__":
     main()
