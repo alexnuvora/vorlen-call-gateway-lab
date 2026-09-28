@@ -60,6 +60,20 @@ def handle(conn,input_dev,output_dev):
     finally:
         stop.set(); inp.stop(); out.stop(); inp.close(); out.close(); conn.close()
 
+def resolve_device(value, kind):
+    """Treat an all-digit CLI value as a PortAudio device index; otherwise use its name."""
+    if isinstance(value, str) and value.strip().isdigit():
+        index = int(value.strip())
+        devices = sd.query_devices()
+        if index < 0 or index >= len(devices):
+            raise ValueError(f"{kind} device index {index} is out of range (0..{len(devices)-1})")
+        info = devices[index]
+        channels_key = "max_input_channels" if kind == "input" else "max_output_channels"
+        if info[channels_key] < 1:
+            raise ValueError(f"device {index} ({info['name']}) has no {kind} channels")
+        return index
+    return value
+
 def main():
     p=argparse.ArgumentParser()
     p.add_argument("--bind",default="0.0.0.0")
@@ -78,7 +92,10 @@ def main():
         print(f"Vorlen laptop bridge listening on {a.bind}:{a.port}")
         while True:
             c,_=s.accept()
-            try: handle(c,a.input,a.output)
+            try:
+                input_dev = resolve_device(a.input, "input")
+                output_dev = resolve_device(a.output, "output")
+                handle(c,input_dev,output_dev)
             except Exception as e: print("Bridge disconnected:",e); time.sleep(.5)
 
 if __name__=="__main__":
