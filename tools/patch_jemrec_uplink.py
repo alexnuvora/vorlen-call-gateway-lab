@@ -6,14 +6,117 @@ s=s.replace("import android.media.AudioManager;","""import android.media.AudioMa
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
-import android.media.AudioTrack;\nimport android.media.AudioRecord;""")
+import android.media.AudioTrack;\nimport android.media.AudioRecord;
+import android.media.MediaRecorder;""")
 s=s.replace("private static final int COMMAND_RECORD = 'R';","""private static final int COMMAND_RECORD = 'R';
     // Vorlen lab only: bounded digital telephony uplink proof.
     private static final int COMMAND_UPLINK_TEST = 'U';
     private static final int COMMAND_UPLINK_PCM = 'T';
-    private static final int COMMAND_DUPLEX = 'D';\n    private static final int COMMAND_CHATGPT_BRIDGE = 'G';""")
+    private static final int COMMAND_DUPLEX = 'D';\n    private static final int COMMAND_CHATGPT_BRIDGE = 'G';
+    private static final int COMMAND_REVERSE_BRIDGE = 'H';""")
 anchor="""        if (command == COMMAND_RECORD) {"""
-handler=r'''        if (command == COMMAND_CHATGPT_BRIDGE) {
+handler=r'''        if (command == COMMAND_REVERSE_BRIDGE) {
+            OutputStream os = client.getOutputStream();
+            AudioRecord rx = null;
+            AudioTrack inject = null;
+            Object policy = null;
+            try {
+                Context context = FakeContext.get();
+                AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+                if (am.getMode() != AudioManager.MODE_IN_CALL) {
+                    os.write(("BLOCKED mode=" + am.getMode() + " (cellular call must be active)\n").getBytes(StandardCharsets.UTF_8));
+                    os.flush(); return;
+                }
+                final int rate = 48000;
+                AudioDeviceInfo telephonyRx = null;
+                for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
+                    if (d.getType() == AudioDeviceInfo.TYPE_TELEPHONY) telephonyRx = d;
+                }
+
+                int min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+                rx = new AudioRecord(MediaRecorder.AudioSource.VOICE_CALL, rate, AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT, Math.max(min, 9600));
+                if (rx.getState() != AudioRecord.STATE_INITIALIZED) throw new IllegalStateException("VOICE_CALL RX not initialized");
+                if (telephonyRx != null) rx.setPreferredDevice(telephonyRx);
+
+                // Create an AudioPolicy injection mix targeting VOICE_COMMUNICATION capture.
+                // createAudioTrackSource() is the reverse of the playback-capture sink used by
+                // the outbound bridge: PCM written here becomes input to matching record clients.
+                Class<?> rbc = Class.forName("android.media.audiopolicy.AudioMixingRule$Builder");
+                Object rb = rbc.getConstructor().newInstance();
+                AudioAttributes.Builder ab = new AudioAttributes.Builder();
+                try {
+                    AudioAttributes.Builder.class.getMethod("setCapturePreset", int.class)
+                            .invoke(ab, MediaRecorder.AudioSource.VOICE_COMMUNICATION);
+                } catch (Throwable e) {
+                    throw new IllegalStateException("setCapturePreset unavailable: " + e);
+                }
+                AudioAttributes capture = ab.build();
+                // RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET = 2
+                rbc.getMethod("addMixRule", AudioAttributes.class, int.class).invoke(rb, capture, 2);
+                Object rule = rbc.getMethod("build").invoke(rb);
+                Class<?> rc = Class.forName("android.media.audiopolicy.AudioMixingRule");
+                Class<?> mbc = Class.forName("android.media.audiopolicy.AudioMix$Builder");
+                Object mb = mbc.getConstructor(rc).newInstance(rule);
+                AudioFormat fmt = new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build();
+                mbc.getMethod("setFormat", AudioFormat.class).invoke(mb, fmt);
+                mbc.getMethod("setRouteFlags", int.class).invoke(mb, 2);
+                Object mix = mbc.getMethod("build").invoke(mb);
+                Class<?> mc = Class.forName("android.media.audiopolicy.AudioMix");
+                Class<?> pbc = Class.forName("android.media.audiopolicy.AudioPolicy$Builder");
+                Object pb = pbc.getConstructor(Context.class).newInstance(context);
+                pbc.getMethod("addMix", mc).invoke(pb, mix);
+                policy = pbc.getMethod("build").invoke(pb);
+                Class<?> pc = Class.forName("android.media.audiopolicy.AudioPolicy");
+                int status = ((Integer)AudioManager.class.getMethod("registerAudioPolicy", pc).invoke(am, policy)).intValue();
+                if (status != 0) throw new IllegalStateException("register reverse AudioPolicy=" + status);
+                inject = (AudioTrack)pc.getMethod("createAudioTrackSource", mc).invoke(policy, mix);
+                if (inject == null || inject.getState() != AudioTrack.STATE_INITIALIZED)
+                    throw new IllegalStateException("reverse injection track not initialized");
+
+                os.write("READY — REVERSE BRIDGE active for 60 seconds; remote caller speak to ChatGPT\n".getBytes(StandardCharsets.UTF_8));
+                os.flush();
+                rx.startRecording(); inject.play();
+                byte[] pcm = new byte[1920];
+                long end = System.currentTimeMillis() + 60000L;
+                long samples=0,sumSq=0,nonZero=0; int peak=0,reads=0,errors=0,written=0;
+                while (System.currentTimeMillis() < end) {
+                    int n=rx.read(pcm,0,pcm.length,AudioRecord.READ_BLOCKING);
+                    if(n<=0){errors++;continue;} reads++;
+                    for(int i=0;i+1<n;i+=2){
+                        int v=(short)((pcm[i]&255)|(pcm[i+1]<<8)); int a=Math.abs(v);
+                        if(a>peak)peak=a; if(v!=0)nonZero++; sumSq+=(long)v*v; samples++;
+                    }
+                    int off=0;
+                    while(off<n){int w=inject.write(pcm,off,n-off,AudioTrack.WRITE_BLOCKING);if(w<=0)throw new IllegalStateException("reverse write "+w);off+=w;written+=w;}
+                }
+                rx.stop(); inject.stop();
+                double rms=samples==0?0.0:Math.sqrt((double)sumSq/samples);
+                double nz=samples==0?0.0:100.0*nonZero/samples;
+                AudioDeviceInfo rr=rx.getRoutedDevice(),ir=inject.getRoutedDevice();
+                os.write(("COMPLETE reverseCaptureRms="+String.format(java.util.Locale.US,"%.1f",rms)+
+                        " reverseCapturePeak="+peak+" reverseNonZeroPct="+String.format(java.util.Locale.US,"%.2f",nz)+
+                        " reverseReads="+reads+" reverseReadErrors="+errors+" reverseInjectedBytes="+written+
+                        " telephonyRxRoute="+(rr==null?"null":rr.getType()+"/"+rr.getId())+
+                        " injectionRoute="+(ir==null?"null":ir.getType()+"/"+ir.getId())+
+                        " verdict="+(peak>8&&rms>1.0?"REVERSE_SIGNAL_PRESENT":"REVERSE_SILENT")+"\n").getBytes(StandardCharsets.UTF_8));
+                os.flush();
+            } catch(Throwable t) {
+                os.write(("FAILED "+t.getClass().getName()+": "+String.valueOf(t.getMessage())+"\n").getBytes(StandardCharsets.UTF_8)); os.flush();
+            } finally {
+                if(rx!=null)try{rx.release();}catch(Throwable ignored){}
+                if(inject!=null)try{inject.release();}catch(Throwable ignored){}
+                if(policy!=null)try{
+                    Class<?> pc=Class.forName("android.media.audiopolicy.AudioPolicy");
+                    AudioManager am=(AudioManager)FakeContext.get().getSystemService(Context.AUDIO_SERVICE);
+                    AudioManager.class.getMethod("unregisterAudioPolicy",pc).invoke(am,policy);
+                }catch(Throwable ignored){}
+            }
+            return;
+        }
+
+        if (command == COMMAND_CHATGPT_BRIDGE) {
             OutputStream os = client.getOutputStream();
             AudioRecord record = null;
             AudioTrack track = null;
