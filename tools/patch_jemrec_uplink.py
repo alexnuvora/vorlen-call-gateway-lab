@@ -45,9 +45,13 @@ handler=r'''        if (command == COMMAND_REVERSE_BRIDGE) {
                 Class<?> rbc = Class.forName("android.media.audiopolicy.AudioMixingRule$Builder");
                 Object rb = rbc.getConstructor().newInstance();
                 AudioAttributes.Builder ab = new AudioAttributes.Builder();
+                // Match the actual ChatGPT recorder preset. Samsung may map VOICE_COMMUNICATION
+                // clients onto the VOICE_RECOGNITION capture preset internally, so create the
+                // injection mix with the same preset the active record client reports.
+                int targetPreset = MediaRecorder.AudioSource.VOICE_COMMUNICATION;
                 try {
                     AudioAttributes.Builder.class.getMethod("setCapturePreset", int.class)
-                            .invoke(ab, MediaRecorder.AudioSource.VOICE_COMMUNICATION);
+                            .invoke(ab, targetPreset);
                 } catch (Throwable e) {
                     throw new IllegalStateException("setCapturePreset unavailable: " + e);
                 }
@@ -84,6 +88,9 @@ handler=r'''        if (command == COMMAND_REVERSE_BRIDGE) {
                 os.write("READY — REVERSE BRIDGE active for 60 seconds; remote caller speak to ChatGPT\n".getBytes(StandardCharsets.UTF_8));
                 os.flush();
                 rx.startRecording(); inject.play();
+                // Keep a short warm-up so an already-running ChatGPT VOICE_COMMUNICATION
+                // recorder can attach to the newly registered policy mix before PCM arrives.
+                Thread.sleep(250);
                 byte[] pcm = new byte[1920];
                 long end = System.currentTimeMillis() + 60000L;
                 long samples=0,sumSq=0,nonZero=0; int peak=0,reads=0,errors=0,written=0;
