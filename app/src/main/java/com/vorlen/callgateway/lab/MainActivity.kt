@@ -172,6 +172,24 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        findViewById<Button>(R.id.startLaptopBridge).setOnClickListener {
+            if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
+                audioState.text = "LAPTOP BRIDGE BLOCKED — no active cellular call"
+            } else {
+                val host = findViewById<EditText>(R.id.laptopIp).text.toString().trim()
+                val port = findViewById<EditText>(R.id.laptopPort).text.toString().toIntOrNull() ?: 28761
+                if (host.isBlank()) {
+                    audioState.text = "Enter the laptop LAN IP address"
+                } else {
+                    audioState.text = "LAPTOP BRIDGE — connecting to $host:$port…"
+                    outboundIo.execute {
+                        val result = runBlocking { ShellCallAudio.runLaptopNetworkBridge(this@MainActivity, host, port) }
+                        runOnUiThread { audioState.text = result.report }
+                    }
+                }
+            }
+        }
+
         findViewById<Button>(R.id.testChatGptCallBridge).setOnClickListener {
             if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
                 audioState.text = "CHATGPT → CALL BRIDGE BLOCKED — no active cellular call"
