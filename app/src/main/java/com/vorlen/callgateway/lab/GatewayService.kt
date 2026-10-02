@@ -12,6 +12,8 @@ import android.telephony.TelephonyManager
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
+import com.vorlen.callgateway.lab.audio.ShellCallAudio
+import kotlinx.coroutines.runBlocking
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -19,11 +21,13 @@ import java.util.concurrent.Executors
 class GatewayService : Service() {
     private val pollIo=Executors.newSingleThreadExecutor()
     private val outboundIo=Executors.newSingleThreadExecutor()
+    private val bridgeIo=Executors.newSingleThreadExecutor()
     @Volatile private var running=false
     @Volatile private var activeRequestId:String?=null
     @Volatile private var sawOffHook=false
     @Volatile private var lastCallState=TelephonyManager.CALL_STATE_IDLE
     @Volatile private var requestStartedAtMs=0L
+    @Volatile private var bridgeRunning=false
     private lateinit var telephony:TelephonyManager
 
     @Suppress("DEPRECATION")
@@ -37,7 +41,10 @@ class GatewayService : Service() {
         val previous=lastCallState
         lastCallState=state
         val name=when(state){TelephonyManager.CALL_STATE_RINGING->"ringing";TelephonyManager.CALL_STATE_OFFHOOK->"active";else->"idle"}
-        if(state==TelephonyManager.CALL_STATE_OFFHOOK)sawOffHook=true
+        if(state==TelephonyManager.CALL_STATE_OFFHOOK){
+            sawOffHook=true
+            startDigitalBridgeIfConfigured()
+        }
         val id=activeRequestId?:return
         if(state!=previous)sendEvent("call_state",name,id)
         if(state==TelephonyManager.CALL_STATE_IDLE&&sawOffHook){
@@ -46,6 +53,28 @@ class GatewayService : Service() {
             activeRequestId=null
             sawOffHook=false
             requestStartedAtMs=0L
+        }
+    }
+
+    private fun startDigitalBridgeIfConfigured(){
+        if(bridgeRunning)return
+        val prefs=getSharedPreferences("gateway",MODE_PRIVATE)
+        val host=prefs.getString("laptop_host","")?.trim().orEmpty()
+        val port=prefs.getInt("laptop_port",28761)
+        if(host.isBlank()||port !in 1..65535)return
+        bridgeRunning=true
+        bridgeIo.execute{
+            try{
+                runBlocking{
+                    ShellCallAudio.runLaptopNetworkBridge(this@GatewayService,host,port){ ready ->
+                        sendEvent("digital_bridge_active","active",activeRequestId)
+                    }
+                }
+            }catch(_:Throwable){
+                sendEvent("digital_bridge_failed","active",activeRequestId)
+            }finally{
+                bridgeRunning=false
+            }
         }
     }
 
@@ -139,7 +168,7 @@ class GatewayService : Service() {
     private fun placeSimCall(number:String):CallResult{
         if(!validNumber(number))return CallResult(false,"Invalid number")
         if(ActivityCompat.checkSelfPermission(this,Manifest.permission.CALL_PHONE)!=PackageManager.PERMISSION_GRANTED)return CallResult(false,"Call permission required")
-        return try{val extras=Bundle().apply{putBoolean(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE,true)};getSystemService(TelecomManager::class.java).placeCall(Uri.parse("tel:$number"),extras);CallResult(true,"Call requested")}catch(e:Exception){CallResult(false,e.message?:"Call failed")}
+        return try{val extras=Bundle().apply{putBoolean(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE,false)};getSystemService(TelecomManager::class.java).placeCall(Uri.parse("tel:$number"),extras);CallResult(true,"Call requested")}catch(e:Exception){CallResult(false,e.message?:"Call failed")}
     }
     private fun endSimCall():CallResult{
         if(ActivityCompat.checkSelfPermission(this,Manifest.permission.ANSWER_PHONE_CALLS)!=PackageManager.PERMISSION_GRANTED)return CallResult(false,"Phone-control permission required")
@@ -152,7 +181,7 @@ class GatewayService : Service() {
         return NotificationCompat.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.sym_action_call).setContentTitle("Vorlen Call Gateway").setContentText("Calling session approved — gateway active").setOngoing(true).setContentIntent(open).addAction(android.R.drawable.ic_menu_close_clear_cancel,"End session",stop).build()
     }
     private fun stopGateway(){running=false;stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()}
-    override fun onDestroy(){running=false;if(::telephony.isInitialized){@Suppress("DEPRECATION") telephony.listen(phoneListener,PhoneStateListener.LISTEN_NONE)};pollIo.shutdownNow();outboundIo.shutdownNow();super.onDestroy()}
+    override fun onDestroy(){running=false;if(::telephony.isInitialized){@Suppress("DEPRECATION") telephony.listen(phoneListener,PhoneStateListener.LISTEN_NONE)};pollIo.shutdownNow();outboundIo.shutdownNow();bridgeIo.shutdownNow();super.onDestroy()}
     override fun onBind(intent:Intent?)=null
     data class CallResult(val success:Boolean,val message:String)
     private fun validNumber(n:String):Boolean{if(!n.matches(Regex("^\\+?[0-9]{7,15}$")))return false;return n.filter(Char::isDigit) !in setOf("999","112","911","000")}
