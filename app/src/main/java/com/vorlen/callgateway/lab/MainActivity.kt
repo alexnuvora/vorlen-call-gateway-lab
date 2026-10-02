@@ -59,6 +59,10 @@ class MainActivity : AppCompatActivity() {
         val sessionState = findViewById<TextView>(R.id.sessionState)
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
         pairingToken.setText(prefs.getString("device_token", ""))
+        val laptopIpView = findViewById<EditText>(R.id.laptopIp)
+        val laptopPortView = findViewById<EditText>(R.id.laptopPort)
+        laptopIpView.setText(prefs.getString("laptop_host", laptopIpView.text.toString()))
+        laptopPortView.setText(prefs.getInt("laptop_port", laptopPortView.text.toString().toIntOrNull() ?: 28761).toString())
         handleApprovedIntent(intent, number, status)
         createApprovalChannel()
 
@@ -405,6 +409,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.approveSession).setOnClickListener {
             sessionApproved = !sessionApproved
             if (sessionApproved) {
+                val bridgeHost = findViewById<EditText>(R.id.laptopIp).text.toString().trim()
+                val bridgePort = findViewById<EditText>(R.id.laptopPort).text.toString().toIntOrNull() ?: 28761
+                prefs.edit().putString("laptop_host", bridgeHost).putInt("laptop_port", bridgePort).apply()
                 androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GatewayService::class.java))
                 polling = false
             } else {
@@ -712,7 +719,7 @@ class MainActivity : AppCompatActivity() {
             return CallResult(false, "Call permission required")
         }
         return try {
-            val extras = Bundle().apply { putBoolean(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE, true) }
+            val extras = Bundle().apply { putBoolean(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE, false) }
             getSystemService(TelecomManager::class.java).placeCall(Uri.parse("tel:$number"), extras)
             CallResult(true, "Call requested")
         } catch (e: Exception) {
