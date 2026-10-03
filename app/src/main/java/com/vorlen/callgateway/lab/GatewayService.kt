@@ -29,6 +29,7 @@ class GatewayService : Service() {
     @Volatile private var requestStartedAtMs=0L
     @Volatile private var bridgeRunning=false
     @Volatile private var bridgePending=false
+    @Volatile private var bridgeEverActive=false
     private lateinit var telephony:TelephonyManager
 
     @Suppress("DEPRECATION")
@@ -56,6 +57,7 @@ class GatewayService : Service() {
             sawOffHook=false
             requestStartedAtMs=0L
             bridgePending=false
+            bridgeEverActive=false
             ShellCallAudio.stopLaptopNetworkBridge()
         }
     }
@@ -75,18 +77,24 @@ class GatewayService : Service() {
         bridgeIo.execute{
             try{
                 val deadline=SystemClock.elapsedRealtime()+45_000L
-                while(running && activeRequestId!=null && bridgePending && SystemClock.elapsedRealtime()<deadline){
+                while(running && activeRequestId!=null && (bridgePending || bridgeEverActive) && (bridgeEverActive || SystemClock.elapsedRealtime()<deadline)){
                     val result=runBlocking{
                         ShellCallAudio.runLaptopNetworkBridge(this@GatewayService,host,port){ _ ->
                             bridgePending=false
+                            bridgeEverActive=true
                             sendEvent("digital_bridge_active","active",activeRequestId)
                         }
                     }
-                    if(!bridgePending) break
-                    sendEvent("digital_bridge_retry",("retry_"+result.report).take(240),activeRequestId)
+                    if(!bridgePending && result.passed) break
+                    if(bridgeEverActive && activeRequestId!=null && sawOffHook){
+                        bridgePending=true
+                        sendEvent("digital_bridge_reconnect",("reconnect_"+result.report).take(240),activeRequestId)
+                    } else {
+                        sendEvent("digital_bridge_retry",("retry_"+result.report).take(240),activeRequestId)
+                    }
                     Thread.sleep(1000)
                 }
-                if(bridgePending && activeRequestId!=null){
+                if(bridgePending && !bridgeEverActive && activeRequestId!=null){
                     sendEvent("digital_bridge_failed","timeout_no_laptop_handshake",activeRequestId)
                     bridgePending=false
                 }
@@ -148,7 +156,7 @@ class GatewayService : Service() {
                 }else if(command!=null&&command.optString("action")=="call"){
                     val id=command.optString("id");val phone=command.optString("phone_number")
                     if(validNumber(phone)&&activeRequestId==null){
-                        activeRequestId=id;sawOffHook=lastCallState==TelephonyManager.CALL_STATE_OFFHOOK;requestStartedAtMs=SystemClock.elapsedRealtime();bridgePending=true
+                        activeRequestId=id;sawOffHook=lastCallState==TelephonyManager.CALL_STATE_OFFHOOK;requestStartedAtMs=SystemClock.elapsedRealtime();bridgePending=true;bridgeEverActive=false
                         val result=placeSimCall(phone)
                         if(!result.success){activeRequestId=null;sawOffHook=false;requestStartedAtMs=0L}
                         gatewayAck(token,id,if(result.success)"claimed" else "failed","request",if(result.success)null else result.message)
@@ -209,8 +217,8 @@ class GatewayService : Service() {
         val stop=PendingIntent.getService(this,1,Intent(this,GatewayService::class.java).setAction(ACTION_STOP),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.sym_action_call).setContentTitle("Vorlen Call Gateway").setContentText("Calling session approved — gateway active").setOngoing(true).setContentIntent(open).addAction(android.R.drawable.ic_menu_close_clear_cancel,"End session",stop).build()
     }
-    private fun stopGateway(){running=false;bridgePending=false;ShellCallAudio.stopLaptopNetworkBridge();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()}
-    override fun onDestroy(){running=false;bridgePending=false;ShellCallAudio.stopLaptopNetworkBridge();if(::telephony.isInitialized){@Suppress("DEPRECATION") telephony.listen(phoneListener,PhoneStateListener.LISTEN_NONE)};pollIo.shutdownNow();outboundIo.shutdownNow();bridgeIo.shutdownNow();super.onDestroy()}
+    private fun stopGateway(){running=false;bridgePending=false;bridgeEverActive=false;ShellCallAudio.stopLaptopNetworkBridge();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()}
+    override fun onDestroy(){running=false;bridgePending=false;bridgeEverActive=false;ShellCallAudio.stopLaptopNetworkBridge();if(::telephony.isInitialized){@Suppress("DEPRECATION") telephony.listen(phoneListener,PhoneStateListener.LISTEN_NONE)};pollIo.shutdownNow();outboundIo.shutdownNow();bridgeIo.shutdownNow();super.onDestroy()}
     override fun onBind(intent:Intent?)=null
     data class CallResult(val success:Boolean,val message:String)
     private fun validNumber(n:String):Boolean{if(!n.matches(Regex("^\\+?[0-9]{7,15}$")))return false;return n.filter(Char::isDigit) !in setOf("999","112","911","000")}
