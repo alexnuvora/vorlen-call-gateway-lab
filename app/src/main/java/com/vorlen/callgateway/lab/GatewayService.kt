@@ -64,7 +64,7 @@ class GatewayService : Service() {
         bridgePending=true
         if(bridgeRunning)return
         val prefs=getSharedPreferences("gateway",MODE_PRIVATE)
-        val host=prefs.getString("laptop_host","192.168.1.8")?.trim().orEmpty()
+        val host=prefs.getString("laptop_host","192.168.1.3")?.trim().orEmpty()
         val port=prefs.getInt("laptop_port",28761)
         if(host.isBlank()||port !in 1..65535){
             sendEvent("digital_bridge_failed","invalid_target",activeRequestId)
