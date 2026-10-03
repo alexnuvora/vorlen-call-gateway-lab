@@ -36,6 +36,17 @@ object ShellCallAudio {
     private val random = SecureRandom()
     private val daemonLabel = "jemrec-daemon".toByteArray()
     private val clientLabel = "jemrec-client".toByteArray()
+    @Volatile private var activeLaptopSocket: Socket? = null
+    @Volatile private var activeShellSocket: Socket? = null
+
+    fun stopLaptopNetworkBridge() {
+        val laptop = activeLaptopSocket
+        val shell = activeShellSocket
+        activeLaptopSocket = null
+        activeShellSocket = null
+        runCatching { laptop?.close() }
+        runCatching { shell?.close() }
+    }
 
     data class TestResult(val passed: Boolean, val report: String)
     data class ProofResult(val passed: Boolean, val report: String, val wav: File?)
@@ -153,6 +164,7 @@ object ShellCallAudio {
             if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
             bootstrap(context).getOrThrow()
             val shell = open(context, LAPTOP_BRIDGE.toByte())
+            activeShellSocket = shell
             shell.soTimeout = 10_000
             val shellIn = java.io.DataInputStream(shell.getInputStream())
             val shellOut = java.io.DataOutputStream(shell.getOutputStream())
@@ -163,6 +175,7 @@ object ShellCallAudio {
             // The bridge is not active until the laptop TCP connection and
             // application-level VOR1 handshake have both succeeded.
             val laptop = Socket()
+            activeLaptopSocket = laptop
             laptop.connect(InetSocketAddress(host, port), 5000)
             laptop.tcpNoDelay = true
             laptop.soTimeout = 10_000
@@ -200,6 +213,8 @@ object ShellCallAudio {
                 runCatching { shellOut.writeInt(0); shellOut.flush() }
                 runCatching { laptop.close() }
                 runCatching { shell.close() }
+                if (activeLaptopSocket === laptop) activeLaptopSocket = null
+                if (activeShellSocket === shell) activeShellSocket = null
                 runCatching { callerToLaptop.join(1500) }
             }
             error.get()?.let { throw it }
