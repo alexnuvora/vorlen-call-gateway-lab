@@ -59,19 +59,37 @@ class GatewayService : Service() {
     private fun startDigitalBridgeIfConfigured(){
         if(bridgeRunning)return
         val prefs=getSharedPreferences("gateway",MODE_PRIVATE)
-        val host=prefs.getString("laptop_host","")?.trim().orEmpty()
+        val host=prefs.getString("laptop_host","192.168.1.8")?.trim().orEmpty()
         val port=prefs.getInt("laptop_port",28761)
         if(host.isBlank()||port !in 1..65535)return
         bridgeRunning=true
         bridgeIo.execute{
             try{
-                runBlocking{
-                    ShellCallAudio.runLaptopNetworkBridge(this@GatewayService,host,port){ ready ->
-                        sendEvent("digital_bridge_active","active",activeRequestId)
+                // Samsung/One UI does not always deliver CALL_STATE_OFFHOOK reliably.
+                // Start from the successful placeCall path as well and retry while the
+                // cellular audio route is coming up. The shell bridge itself is the
+                // authority on whether Telephony RX/TX is ready.
+                var connected=false
+                var lastReport="Digital bridge did not become ready"
+                val deadline=SystemClock.elapsedRealtime()+30_000L
+                while(running && activeRequestId!=null && !connected && SystemClock.elapsedRealtime()<deadline){
+                    val result=runBlocking{
+                        ShellCallAudio.runLaptopNetworkBridge(this@GatewayService,host,port){ _ ->
+                            connected=true
+                            sendEvent("digital_bridge_active","active",activeRequestId)
+                        }
                     }
+                    if(connected) break
+                    lastReport=result.report
+                    Thread.sleep(750)
                 }
+                if(!connected && activeRequestId!=null){
+                    sendEvent("digital_bridge_failed","active",activeRequestId)
+                }
+            }catch(_:InterruptedException){
+                Thread.currentThread().interrupt()
             }catch(_:Throwable){
-                sendEvent("digital_bridge_failed","active",activeRequestId)
+                if(activeRequestId!=null)sendEvent("digital_bridge_failed","active",activeRequestId)
             }finally{
                 bridgeRunning=false
             }
@@ -129,7 +147,12 @@ class GatewayService : Service() {
                         val result=placeSimCall(phone)
                         if(!result.success){activeRequestId=null;sawOffHook=false;requestStartedAtMs=0L}
                         gatewayAck(token,id,if(result.success)"claimed" else "failed","request",if(result.success)null else result.message)
-                        if(result.success)sendEvent("call_requested",if(sawOffHook)"active" else "dialing",id)
+                        if(result.success){
+                            sendEvent("call_requested",if(sawOffHook)"active" else "dialing",id)
+                            // Do not depend solely on PhoneStateListener: begin bridge
+                            // acquisition immediately after Android accepts placeCall().
+                            startDigitalBridgeIfConfigured()
+                        }
                     }
                 }
                 reconcileCallState()
