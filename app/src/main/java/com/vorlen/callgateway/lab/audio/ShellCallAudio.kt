@@ -161,8 +161,13 @@ object ShellCallAudio {
         runCatching {
             require(host.isNotBlank()) { "Laptop IP is required" }
             require(port in 1..65535) { "Invalid laptop port" }
-            if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
-            bootstrap(context).getOrThrow()
+            // ADB is bootstrap-only. Reuse the resident privileged daemon first so
+            // an active/sequential calling session does not depend on Samsung
+            // keeping Wireless Debugging enabled.
+            if (!ping()) {
+                if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
+                bootstrap(context).getOrThrow()
+            }
             val shell = open(context, LAPTOP_BRIDGE.toByte())
             activeShellSocket = shell
             shell.soTimeout = 10_000
