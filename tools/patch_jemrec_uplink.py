@@ -46,7 +46,7 @@ handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
                         .setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build();
                 int outMin=AudioTrack.getMinBufferSize(rate,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT);
                 tx=new AudioTrack.Builder().setAudioAttributes(attrs).setAudioFormat(fmt)
-                        .setBufferSizeInBytes(Math.max(outMin,9600)).setTransferMode(AudioTrack.MODE_STREAM).build();
+                        .setBufferSizeInBytes(Math.max(outMin,3840)).setTransferMode(AudioTrack.MODE_STREAM).build();
                 if(!tx.setPreferredDevice(telephonyTx)) throw new IllegalStateException("Telephony TX rejected");
 
                 StringBuilder txRates=new StringBuilder();
@@ -81,7 +81,7 @@ handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
                     if ((n & 1) != 0) throw new IllegalArgumentException("unaligned PCM frame "+n);
                     int off=0;
                     while(off<n){
-                        int w=tx.write(b,off,Math.min(1920,n-off),AudioTrack.WRITE_BLOCKING);
+                        int w=tx.write(b,off,Math.min(960,n-off),AudioTrack.WRITE_BLOCKING);
                         if(w<=0) throw new IllegalStateException("Telephony TX write "+w);
                         off+=w;
                     }
