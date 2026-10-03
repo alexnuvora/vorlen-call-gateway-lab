@@ -56,6 +56,7 @@ class GatewayService : Service() {
             sawOffHook=false
             requestStartedAtMs=0L
             bridgePending=false
+            ShellCallAudio.stopLaptopNetworkBridge()
         }
     }
 
@@ -208,8 +209,8 @@ class GatewayService : Service() {
         val stop=PendingIntent.getService(this,1,Intent(this,GatewayService::class.java).setAction(ACTION_STOP),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.sym_action_call).setContentTitle("Vorlen Call Gateway").setContentText("Calling session approved — gateway active").setOngoing(true).setContentIntent(open).addAction(android.R.drawable.ic_menu_close_clear_cancel,"End session",stop).build()
     }
-    private fun stopGateway(){running=false;stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()}
-    override fun onDestroy(){running=false;if(::telephony.isInitialized){@Suppress("DEPRECATION") telephony.listen(phoneListener,PhoneStateListener.LISTEN_NONE)};pollIo.shutdownNow();outboundIo.shutdownNow();bridgeIo.shutdownNow();super.onDestroy()}
+    private fun stopGateway(){running=false;bridgePending=false;ShellCallAudio.stopLaptopNetworkBridge();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()}
+    override fun onDestroy(){running=false;bridgePending=false;ShellCallAudio.stopLaptopNetworkBridge();if(::telephony.isInitialized){@Suppress("DEPRECATION") telephony.listen(phoneListener,PhoneStateListener.LISTEN_NONE)};pollIo.shutdownNow();outboundIo.shutdownNow();bridgeIo.shutdownNow();super.onDestroy()}
     override fun onBind(intent:Intent?)=null
     data class CallResult(val success:Boolean,val message:String)
     private fun validNumber(n:String):Boolean{if(!n.matches(Regex("^\\+?[0-9]{7,15}$")))return false;return n.filter(Char::isDigit) !in setOf("999","112","911","000")}
