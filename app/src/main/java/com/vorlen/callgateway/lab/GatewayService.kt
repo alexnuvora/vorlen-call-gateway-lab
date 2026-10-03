@@ -83,11 +83,11 @@ class GatewayService : Service() {
                         }
                     }
                     if(!bridgePending) break
-                    sendEvent("digital_bridge_retry","waiting",activeRequestId)
+                    sendEvent("digital_bridge_retry",("retry_"+result.report).take(240),activeRequestId)
                     Thread.sleep(1000)
                 }
                 if(bridgePending && activeRequestId!=null){
-                    sendEvent("digital_bridge_failed","timeout",activeRequestId)
+                    sendEvent("digital_bridge_failed","timeout_no_laptop_handshake",activeRequestId)
                     bridgePending=false
                 }
             }catch(_:InterruptedException){
