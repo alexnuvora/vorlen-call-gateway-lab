@@ -85,7 +85,12 @@ class GatewayService : Service() {
                             sendEvent("digital_bridge_active","active",activeRequestId)
                         }
                     }
-                    if(!bridgePending && result.passed) break
+                    // A bridge ending while the cellular call is still active is
+                    // transport loss, not call completion. Keep reacquiring the
+                    // daemon/laptop path without ending the call.
+                    if(result.passed && activeRequestId!=null && sawOffHook){
+                        bridgePending=true
+                    }
                     if(bridgeEverActive && activeRequestId!=null && sawOffHook){
                         bridgePending=true
                         sendEvent("digital_bridge_reconnect",("reconnect_"+result.report).take(240),activeRequestId)
