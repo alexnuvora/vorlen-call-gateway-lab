@@ -158,9 +158,10 @@ object ShellCallAudio {
             val shellOut = java.io.DataOutputStream(shell.getOutputStream())
             val ready = shellIn.readLine() ?: error("No cellular bridge response")
             check(ready.startsWith("READY")) { "Cellular bridge rejected: $ready" }
-            onReady?.invoke(ready)
             shell.soTimeout = 0
 
+            // The bridge is not active until the laptop TCP connection and
+            // application-level VOR1 handshake have both succeeded.
             val laptop = Socket()
             laptop.connect(InetSocketAddress(host, port), 5000)
             laptop.tcpNoDelay = true
@@ -171,6 +172,7 @@ object ShellCallAudio {
             val ack = ByteArray(4); laptopIn.readFully(ack)
             check(String(ack, Charsets.US_ASCII) == "VOR1") { "Laptop handshake failed" }
             laptop.soTimeout = 0
+            onReady?.invoke("LAPTOP_CONNECTED VOR1")
 
             val running = java.util.concurrent.atomic.AtomicBoolean(true)
             val error = java.util.concurrent.atomic.AtomicReference<Throwable>()
