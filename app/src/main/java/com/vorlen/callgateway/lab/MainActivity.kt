@@ -758,7 +758,7 @@ class MainActivity : AppCompatActivity() {
         private const val ACTION_APPROVE_CALL = "com.vorlen.callgateway.lab.APPROVE_CALL"
         private const val EXTRA_PHONE = "phone_number"
         private const val EXTRA_COMMAND_ID = "command_id"
-        private const val DEVICE_CODE = "s24fe-primary"
+        private const val DEVICE_CODE = "s24fe-digital"
         private const val GATEWAY_URL = "https://mzkaodoruhklzluikagy.supabase.co/functions/v1/vorlen-call-device"
         private const val LIVE_TURN_URL = "https://mzkaodoruhklzluikagy.supabase.co/functions/v1/vorlen-live-turn"
         private const val APPROVAL_CHANNEL = "approved_calls"
