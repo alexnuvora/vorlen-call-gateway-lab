@@ -185,5 +185,5 @@ class GatewayService : Service() {
     override fun onBind(intent:Intent?)=null
     data class CallResult(val success:Boolean,val message:String)
     private fun validNumber(n:String):Boolean{if(!n.matches(Regex("^\\+?[0-9]{7,15}$")))return false;return n.filter(Char::isDigit) !in setOf("999","112","911","000")}
-    companion object{const val ACTION_STOP="com.vorlen.callgateway.lab.STOP_GATEWAY";private const val CHANNEL="vorlen_gateway_session";private const val NOTIFICATION_ID=2001;private const val DEVICE_CODE="s24fe-primary";private const val GATEWAY_URL="https://mzkaodoruhklzluikagy.supabase.co/functions/v1/vorlen-call-device"}
+    companion object{const val ACTION_STOP="com.vorlen.callgateway.lab.STOP_GATEWAY";private const val CHANNEL="vorlen_gateway_session";private const val NOTIFICATION_ID=2001;private const val DEVICE_CODE="s24fe-digital";private const val GATEWAY_URL="https://mzkaodoruhklzluikagy.supabase.co/functions/v1/vorlen-call-device"}
 }
