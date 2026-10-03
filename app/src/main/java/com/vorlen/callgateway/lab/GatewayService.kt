@@ -151,7 +151,29 @@ class GatewayService : Service() {
                 if(command!=null&&command.optString("action")=="hangup"){
                     val id=command.optString("id"); val requestId=command.optString("request_id")
                     if(requestId.isBlank()||activeRequestId==null||requestId==activeRequestId){
-                        val result=endSimCall(); gatewayAck(token,id,if(result.success)"completed" else "failed","command",if(result.success)null else result.message)
+                        val result=endSimCall()
+                        // A claimed/dialling request can outlive the actual Telecom call
+                        // (for example when placeCall was accepted but never reached OFFHOOK).
+                        // In that state there is nothing for TelecomManager.endCall() to end,
+                        // but the gateway request still must be released.
+                        val staleRequest = activeRequestId != null && !sawOffHook &&
+                            lastCallState == TelephonyManager.CALL_STATE_IDLE
+                        if(result.success || staleRequest){
+                            val staleId=activeRequestId
+                            bridgePending=false
+                            bridgeEverActive=false
+                            ShellCallAudio.stopLaptopNetworkBridge()
+                            activeRequestId=null
+                            sawOffHook=false
+                            requestStartedAtMs=0L
+                            if(staleId!=null){
+                                sendEvent("call_cancelled","idle",staleId)
+                                completeRequest(staleId)
+                            }
+                            gatewayAck(token,id,"completed","command",null)
+                        }else{
+                            gatewayAck(token,id,"failed","command",result.message)
+                        }
                     }else gatewayAck(token,id,"failed","command","Command does not match active request")
                 }else if(command!=null&&command.optString("action")=="call"){
                     val id=command.optString("id");val phone=command.optString("phone_number")
