@@ -28,6 +28,7 @@ class GatewayService : Service() {
     @Volatile private var lastCallState=TelephonyManager.CALL_STATE_IDLE
     @Volatile private var requestStartedAtMs=0L
     @Volatile private var bridgeRunning=false
+    @Volatile private var bridgePending=false
     private lateinit var telephony:TelephonyManager
 
     @Suppress("DEPRECATION")
@@ -43,6 +44,7 @@ class GatewayService : Service() {
         val name=when(state){TelephonyManager.CALL_STATE_RINGING->"ringing";TelephonyManager.CALL_STATE_OFFHOOK->"active";else->"idle"}
         if(state==TelephonyManager.CALL_STATE_OFFHOOK){
             sawOffHook=true
+            bridgePending=true
             startDigitalBridgeIfConfigured()
         }
         val id=activeRequestId?:return
@@ -53,43 +55,45 @@ class GatewayService : Service() {
             activeRequestId=null
             sawOffHook=false
             requestStartedAtMs=0L
+            bridgePending=false
         }
     }
 
     private fun startDigitalBridgeIfConfigured(){
+        bridgePending=true
         if(bridgeRunning)return
         val prefs=getSharedPreferences("gateway",MODE_PRIVATE)
         val host=prefs.getString("laptop_host","192.168.1.8")?.trim().orEmpty()
         val port=prefs.getInt("laptop_port",28761)
-        if(host.isBlank()||port !in 1..65535)return
+        if(host.isBlank()||port !in 1..65535){
+            sendEvent("digital_bridge_failed","invalid_target",activeRequestId)
+            bridgePending=false
+            return
+        }
         bridgeRunning=true
         bridgeIo.execute{
             try{
-                // Samsung/One UI does not always deliver CALL_STATE_OFFHOOK reliably.
-                // Start from the successful placeCall path as well and retry while the
-                // cellular audio route is coming up. The shell bridge itself is the
-                // authority on whether Telephony RX/TX is ready.
-                var connected=false
-                var lastReport="Digital bridge did not become ready"
-                val deadline=SystemClock.elapsedRealtime()+30_000L
-                while(running && activeRequestId!=null && !connected && SystemClock.elapsedRealtime()<deadline){
+                val deadline=SystemClock.elapsedRealtime()+45_000L
+                while(running && activeRequestId!=null && bridgePending && SystemClock.elapsedRealtime()<deadline){
                     val result=runBlocking{
                         ShellCallAudio.runLaptopNetworkBridge(this@GatewayService,host,port){ _ ->
-                            connected=true
+                            bridgePending=false
                             sendEvent("digital_bridge_active","active",activeRequestId)
                         }
                     }
-                    if(connected) break
-                    lastReport=result.report
-                    Thread.sleep(750)
+                    if(!bridgePending) break
+                    sendEvent("digital_bridge_retry","waiting",activeRequestId)
+                    Thread.sleep(1000)
                 }
-                if(!connected && activeRequestId!=null){
-                    sendEvent("digital_bridge_failed","active",activeRequestId)
+                if(bridgePending && activeRequestId!=null){
+                    sendEvent("digital_bridge_failed","timeout",activeRequestId)
+                    bridgePending=false
                 }
             }catch(_:InterruptedException){
                 Thread.currentThread().interrupt()
             }catch(_:Throwable){
-                if(activeRequestId!=null)sendEvent("digital_bridge_failed","active",activeRequestId)
+                if(activeRequestId!=null)sendEvent("digital_bridge_failed","exception",activeRequestId)
+                bridgePending=false
             }finally{
                 bridgeRunning=false
             }
@@ -143,7 +147,7 @@ class GatewayService : Service() {
                 }else if(command!=null&&command.optString("action")=="call"){
                     val id=command.optString("id");val phone=command.optString("phone_number")
                     if(validNumber(phone)&&activeRequestId==null){
-                        activeRequestId=id;sawOffHook=lastCallState==TelephonyManager.CALL_STATE_OFFHOOK;requestStartedAtMs=SystemClock.elapsedRealtime()
+                        activeRequestId=id;sawOffHook=lastCallState==TelephonyManager.CALL_STATE_OFFHOOK;requestStartedAtMs=SystemClock.elapsedRealtime();bridgePending=true
                         val result=placeSimCall(phone)
                         if(!result.success){activeRequestId=null;sawOffHook=false;requestStartedAtMs=0L}
                         gatewayAck(token,id,if(result.success)"claimed" else "failed","request",if(result.success)null else result.message)
@@ -156,6 +160,7 @@ class GatewayService : Service() {
                     }
                 }
                 reconcileCallState()
+                if(activeRequestId!=null && !bridgeRunning && bridgePending)startDigitalBridgeIfConfigured()
                 enforcePlacementWatchdog()
                 Thread.sleep(3000)
             }catch(_:InterruptedException){Thread.currentThread().interrupt();break}
