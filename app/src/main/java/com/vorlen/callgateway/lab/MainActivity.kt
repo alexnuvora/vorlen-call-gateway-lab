@@ -61,7 +61,7 @@ class MainActivity : AppCompatActivity() {
         pairingToken.setText(prefs.getString("device_token", ""))
         val laptopIpView = findViewById<EditText>(R.id.laptopIp)
         val laptopPortView = findViewById<EditText>(R.id.laptopPort)
-        laptopIpView.setText(prefs.getString("laptop_host", "192.168.1.8"))
+        laptopIpView.setText(prefs.getString("laptop_host", "192.168.1.4"))
         laptopPortView.setText(prefs.getInt("laptop_port", 28761).toString())
         handleApprovedIntent(intent, number, status)
         createApprovalChannel()
