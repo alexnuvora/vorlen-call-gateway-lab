@@ -9,8 +9,8 @@ android {
         applicationId = "com.vorlen.callgateway.lab"
         minSdk = 31
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0-audio-lab"
+        versionCode = 3
+        versionName = "0.3.0-dtmf"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
