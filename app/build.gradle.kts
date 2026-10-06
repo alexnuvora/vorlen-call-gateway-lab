@@ -9,8 +9,8 @@ android {
         applicationId = "com.vorlen.callgateway.lab"
         minSdk = 31
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0-dtmf"
+        versionCode = 4
+        versionName = "0.4.0-persistent-bridge"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
