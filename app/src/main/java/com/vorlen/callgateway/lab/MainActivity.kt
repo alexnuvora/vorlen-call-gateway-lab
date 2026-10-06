@@ -19,6 +19,7 @@ import android.content.Intent
 import android.app.PendingIntent
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.role.RoleManager
 import androidx.core.app.NotificationCompat
 import android.telecom.TelecomManager
 import android.telephony.PhoneStateListener
@@ -65,6 +66,24 @@ class MainActivity : AppCompatActivity() {
         laptopPortView.setText(prefs.getInt("laptop_port", 28761).toString())
         handleApprovedIntent(intent, number, status)
         createApprovalChannel()
+
+        val dtmfState = findViewById<TextView>(R.id.dtmfState)
+        fun refreshDtmfRole() {
+            val roles = getSystemService(RoleManager::class.java)
+            val held = roles.isRoleAvailable(RoleManager.ROLE_DIALER) && roles.isRoleHeld(RoleManager.ROLE_DIALER)
+            dtmfState.text = if (held) "DTMF control: enabled" else "DTMF control: tap Enable and approve Phone app role"
+        }
+        refreshDtmfRole()
+        findViewById<Button>(R.id.enableDtmfControl).setOnClickListener {
+            val roles = getSystemService(RoleManager::class.java)
+            if (!roles.isRoleAvailable(RoleManager.ROLE_DIALER)) {
+                dtmfState.text = "DTMF control: dialer role unavailable on this device"
+            } else if (roles.isRoleHeld(RoleManager.ROLE_DIALER)) {
+                dtmfState.text = "DTMF control: enabled"
+            } else {
+                startActivity(roles.createRequestRoleIntent(RoleManager.ROLE_DIALER))
+            }
+        }
 
         val permissions = buildList {
             add(Manifest.permission.CALL_PHONE)
@@ -526,6 +545,16 @@ class MainActivity : AppCompatActivity() {
             out[i*2] = (v and 255).toByte(); out[i*2+1] = ((v shr 8) and 255).toByte()
         }
         return out
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val view = findViewById<TextView?>(R.id.dtmfState)
+        if (view != null) {
+            val roles = getSystemService(RoleManager::class.java)
+            val held = roles.isRoleAvailable(RoleManager.ROLE_DIALER) && roles.isRoleHeld(RoleManager.ROLE_DIALER)
+            view.text = if (held) "DTMF control: enabled" else "DTMF control: tap Enable and approve Phone app role"
+        }
     }
 
     override fun onDestroy() {
