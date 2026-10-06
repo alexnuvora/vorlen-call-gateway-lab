@@ -21,6 +21,7 @@ object ShellCallAudio {
     private const val ASSET = "vorlen-call-capture.jar"
     private const val DEVICE_PATH = "/data/local/tmp/vorlen-call-capture.jar"
     private const val LOG_PATH = "/data/local/tmp/vorlen-call-capture.out"
+    private const val PID_PATH = "/data/local/tmp/vorlen-call-capture.pid"
     private const val MAIN_CLASS = "com.jemcik.jemrec.shell.Main"
     private const val PORT = 28472
     private const val HELLO = 65
@@ -73,9 +74,13 @@ object ShellCallAudio {
             check(copy.contains("staged")) { "Could not stage shell daemon: $copy" }
             val t = token(context)
             AdbTransport.exec(
-                "pkill -f '[c]om.jemcik.jemrec.shell.Main' 2>/dev/null; " +
-                    "JEMREC_TOKEN=$t JEMREC_MODE=0 CLASSPATH=$DEVICE_PATH setsid nohup " +
-                    "app_process / $MAIN_CLASS $PORT < /dev/null > $LOG_PATH 2>&1 &"
+                "if [ -f $PID_PATH ]; then kill -9 \$(cat $PID_PATH) 2>/dev/null || true; fi; " +
+                    "pkill -9 -f '[c]om.jemcik.jemrec.shell.Main' 2>/dev/null || true; " +
+                    "(trap '' HUP; " +
+                    "JEMREC_TOKEN=$t JEMREC_MODE=0 CLASSPATH=$DEVICE_PATH " +
+                    "setsid /system/bin/app_process / $MAIN_CLASS $PORT " +
+                    "< /dev/null >> $LOG_PATH 2>&1 & echo \$! > $PID_PATH) " +
+                    "> /dev/null 2>&1"
             ).getOrThrow()
             var ready = false
             repeat(20) {
@@ -100,6 +105,28 @@ object ShellCallAudio {
         }
     } catch (_: Throwable) { false }
 
+    /**
+     * Ensure the privileged localhost audio daemon is resident. ADB is only a
+     * bootstrap transport: once ping() succeeds, callers must not require
+     * Wireless Debugging to remain enabled.
+     */
+    suspend fun ensureResidentDaemon(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (ping()) return@runCatching
+            if (!AdbTransport.isConnected) {
+                AdbTransport.autoConnect(context, 6000).getOrThrow()
+            }
+            bootstrap(context).getOrThrow()
+
+            // Prove the detached daemon survives beyond the launch command,
+            // rather than accepting the first transient PONG.
+            Thread.sleep(750)
+            check(ping()) {
+                "Shell audio daemon did not remain resident after ADB bootstrap"
+            }
+        }
+    }
+
     suspend fun bootstrapRaw(context: Context): Result<Unit> = bootstrapWithMode(context, raw = true)
 
     private suspend fun bootstrapWithMode(context: Context, raw: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
@@ -113,9 +140,13 @@ object ShellCallAudio {
             val t = token(context)
             val rawArg = if (raw) " raw" else ""
             AdbTransport.exec(
-                "pkill -f '[c]om.jemcik.jemrec.shell.Main' 2>/dev/null; " +
-                    "JEMREC_TOKEN=$t JEMREC_MODE=0 CLASSPATH=$DEVICE_PATH setsid nohup " +
-                    "app_process / $MAIN_CLASS $PORT$rawArg < /dev/null > $LOG_PATH 2>&1 &"
+                "if [ -f $PID_PATH ]; then kill -9 \$(cat $PID_PATH) 2>/dev/null || true; fi; " +
+                    "pkill -9 -f '[c]om.jemcik.jemrec.shell.Main' 2>/dev/null || true; " +
+                    "(trap '' HUP; " +
+                    "JEMREC_TOKEN=$t JEMREC_MODE=0 CLASSPATH=$DEVICE_PATH " +
+                    "setsid /system/bin/app_process / $MAIN_CLASS $PORT$rawArg " +
+                    "< /dev/null >> $LOG_PATH 2>&1 & echo \$! > $PID_PATH) " +
+                    "> /dev/null 2>&1"
             ).getOrThrow()
             var ready = false
             repeat(20) {
@@ -164,10 +195,7 @@ object ShellCallAudio {
             // ADB is bootstrap-only. Reuse the resident privileged daemon first so
             // an active/sequential calling session does not depend on Samsung
             // keeping Wireless Debugging enabled.
-            if (!ping()) {
-                if (!AdbTransport.isConnected) AdbTransport.autoConnect(context, 6000).getOrThrow()
-                bootstrap(context).getOrThrow()
-            }
+            ensureResidentDaemon(context).getOrThrow()
             val shell = open(context, LAPTOP_BRIDGE.toByte())
             activeShellSocket = shell
             shell.soTimeout = 10_000
