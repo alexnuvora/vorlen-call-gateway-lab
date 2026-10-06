@@ -74,33 +74,42 @@ class GatewayService : Service() {
             return
         }
         bridgeRunning=true
+        val bridgeRequestId=activeRequestId
         bridgeIo.execute{
             try{
                 val deadline=SystemClock.elapsedRealtime()+45_000L
-                while(running && activeRequestId!=null && (bridgePending || bridgeEverActive) && (bridgeEverActive || SystemClock.elapsedRealtime()<deadline)){
+                while(running && activeRequestId==bridgeRequestId && bridgeRequestId!=null && (bridgePending || bridgeEverActive) && (bridgeEverActive || SystemClock.elapsedRealtime()<deadline)){
                     val result=runBlocking{
                         ShellCallAudio.runLaptopNetworkBridge(this@GatewayService,host,port){ _ ->
-                            bridgePending=false
-                            bridgeEverActive=true
-                            sendEvent("digital_bridge_active","active",activeRequestId)
+                            if(activeRequestId==bridgeRequestId){
+                                bridgePending=false
+                                bridgeEverActive=true
+                                sendEvent("digital_bridge_active","active",bridgeRequestId)
+                            }
                         }
                     }
-                    // A bridge ending while the cellular call is still active is
+
+                    // A normal call teardown closes the laptop socket too. Once this
+                    // worker's request is no longer the active call, exit silently:
+                    // that socket close is expected and must not be reported as a
+                    // transport retry/reconnect failure for the next/ended call.
+                    if(!running || activeRequestId!=bridgeRequestId || !sawOffHook){
+                        break
+                    }
+
+                    // A bridge ending while the same cellular call is still active is
                     // transport loss, not call completion. Keep reacquiring the
                     // daemon/laptop path without ending the call.
-                    if(result.passed && activeRequestId!=null && sawOffHook){
-                        bridgePending=true
-                    }
-                    if(bridgeEverActive && activeRequestId!=null && sawOffHook){
-                        bridgePending=true
-                        sendEvent("digital_bridge_reconnect",("reconnect_"+result.report).take(240),activeRequestId)
+                    bridgePending=true
+                    if(bridgeEverActive){
+                        sendEvent("digital_bridge_reconnect",("reconnect_"+result.report).take(240),bridgeRequestId)
                     } else {
-                        sendEvent("digital_bridge_retry",("retry_"+result.report).take(240),activeRequestId)
+                        sendEvent("digital_bridge_retry",("retry_"+result.report).take(240),bridgeRequestId)
                     }
                     Thread.sleep(1000)
                 }
-                if(bridgePending && !bridgeEverActive && activeRequestId!=null){
-                    sendEvent("digital_bridge_failed","timeout_no_laptop_handshake",activeRequestId)
+                if(bridgePending && !bridgeEverActive && activeRequestId==bridgeRequestId && bridgeRequestId!=null){
+                    sendEvent("digital_bridge_failed","timeout_no_laptop_handshake",bridgeRequestId)
                     bridgePending=false
                 }
             }catch(_:InterruptedException){
