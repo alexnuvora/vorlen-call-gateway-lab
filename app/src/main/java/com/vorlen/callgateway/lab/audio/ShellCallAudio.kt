@@ -12,6 +12,7 @@ import java.io.RandomAccessFile
 import kotlin.math.sqrt
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Mac
@@ -188,6 +189,15 @@ object ShellCallAudio {
         }
     }
 
+    private fun expectedBridgeClose(t: Throwable): Boolean {
+        if (t is EOFException || t is SocketException) {
+            val m = (t.message ?: "").lowercase()
+            if (m.isBlank() || m.contains("socket closed") || m.contains("connection reset") ||
+                m.contains("broken pipe") || m.contains("connection abort") || m.contains("stream closed")) return true
+        }
+        return false
+    }
+
     suspend fun runLaptopNetworkBridge(context: Context, host: String, port: Int, onReady: ((String) -> Unit)? = null): TestResult = withContext(Dispatchers.IO) {
         runCatching {
             require(host.isNotBlank()) { "Laptop IP is required" }
@@ -209,8 +219,9 @@ object ShellCallAudio {
             // application-level VOR1 handshake have both succeeded.
             val laptop = Socket()
             activeLaptopSocket = laptop
-            laptop.connect(InetSocketAddress(host, port), 5000)
+            laptop.keepAlive = true
             laptop.tcpNoDelay = true
+            laptop.connect(InetSocketAddress(host, port), 5000)
             laptop.soTimeout = 10_000
             val laptopIn = java.io.DataInputStream(laptop.getInputStream())
             val laptopOut = java.io.DataOutputStream(laptop.getOutputStream())
@@ -230,7 +241,9 @@ object ShellCallAudio {
                         val pcm = ByteArray(n); shellIn.readFully(pcm)
                         synchronized(laptopOut) { laptopOut.writeInt(n); laptopOut.write(pcm); laptopOut.flush() }
                     }
-                } catch (t: Throwable) { error.set(t) } finally { running.set(false) }
+                } catch (t: Throwable) {
+                    if (running.get() || !expectedBridgeClose(t)) error.set(t)
+                } finally { running.set(false) }
             }, "vorlen-caller-to-laptop")
             callerToLaptop.start()
 
@@ -252,7 +265,13 @@ object ShellCallAudio {
             }
             error.get()?.let { throw it }
             TestResult(true, "LAPTOP BRIDGE ENDED")
-        }.getOrElse { TestResult(false, "LAPTOP BRIDGE FAILED — " + (it.message ?: it.javaClass.simpleName)) }
+        }.fold(
+            onSuccess = { it },
+            onFailure = {
+                if (expectedBridgeClose(it)) TestResult(true, "LAPTOP BRIDGE CLOSED")
+                else TestResult(false, "LAPTOP BRIDGE FAILED — " + (it.message ?: it.javaClass.simpleName))
+            }
+        )
     }
 
     suspend fun callToChatGptBridge(context: Context): TestResult = withContext(Dispatchers.IO) {
