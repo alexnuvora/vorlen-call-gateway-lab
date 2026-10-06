@@ -25,6 +25,8 @@
     <TextView android:id="@+id/sessionState" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Calling session: not approved" android:layout_marginTop="8dp"/>
     <TextView android:id="@+id/remoteState" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Remote gateway: not connected" android:layout_marginTop="12dp"/>
     <TextView android:id="@+id/callState" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Call state: idle" android:layout_marginTop="16dp"/>
+    <Button android:id="@+id/enableDtmfControl" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Enable DTMF Call Control" android:layout_marginTop="8dp"/>
+    <TextView android:id="@+id/dtmfState" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="DTMF control: not enabled" android:layout_marginTop="6dp"/>
     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Digital call audio experiment" android:textStyle="bold" android:layout_marginTop="20dp"/>
     <EditText android:id="@+id/adbPairPort" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Wireless debugging pairing port" android:inputType="number" android:layout_marginTop="8dp"/>
     <EditText android:id="@+id/adbPairCode" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="6-digit Wireless debugging pairing code" android:inputType="numberPassword" android:layout_marginTop="8dp"/>
