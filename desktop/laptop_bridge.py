@@ -6,7 +6,19 @@ Vorlen Android cellular gateway.
 
 Usage:
   python laptop_bridge.py --list-devices
-  python laptop_bridge.py --bind 0.0.0.0 --port 28761 --input DEVICE --output DEVICE
+  python laptop_bridge.py --bind 0.0.0.0 --port 28761 --tx-input DEVICE --rx-output DEVICE
+  python laptop_bridge.py --bind 0.0.0.0 --port 28761 --tx-input DEVICE --rx-output DEVICE --monitor-output DEVICE
+
+Audio routing:
+  --rx-output is where CALLER/RINGBACK/VOICEMAIL audio is played. For ChatGPT
+  Voice to hear it, choose the playback side of a virtual audio cable and set
+  ChatGPT Voice's microphone to that cable's recording side.
+
+  --tx-input is what is sent back into the cellular call. Choose the recording
+  side of a second virtual cable and set ChatGPT Voice's speaker/output to that
+  cable's playback side.
+
+  Two separate virtual cables are strongly recommended to avoid feedback.
 """
 import argparse
 import audioop
@@ -24,12 +36,11 @@ except ImportError:
 
 RATE = 48000
 CHANNELS = 1
-INPUT_CHANNELS = 2
+DEFAULT_INPUT_CHANNELS = 2
 DTYPE = "int16"
 SAMPLE_BYTES = 2
 FRAMES = 480                 # 10 ms packets: lower caller->ChatGPT latency
 FRAME_BYTES = FRAMES * SAMPLE_BYTES
-INPUT_FRAME_BYTES = FRAMES * INPUT_CHANNELS * SAMPLE_BYTES
 MAGIC = b"VOR1"
 
 
@@ -90,25 +101,43 @@ def device_description(device, kind):
     )
 
 
-def validate_audio(input_dev, output_dev):
-    sd.check_input_settings(device=input_dev, channels=INPUT_CHANNELS, dtype=DTYPE, samplerate=RATE)
+def choose_input_channels(device):
+    info = sd.query_devices(device, "input")
+    # Virtual cables are commonly mono or stereo. Prefer stereo when available
+    # because ChatGPT/browser output devices frequently expose two channels.
+    return 2 if info["max_input_channels"] >= 2 else 1
+
+
+def validate_audio(input_dev, output_dev, monitor_dev=None):
+    input_channels = choose_input_channels(input_dev)
+    sd.check_input_settings(device=input_dev, channels=input_channels, dtype=DTYPE, samplerate=RATE)
     sd.check_output_settings(device=output_dev, channels=CHANNELS, dtype=DTYPE, samplerate=RATE)
-    print("Input :", device_description(input_dev, "input"))
-    print("Output:", device_description(output_dev, "output"))
-    print(f"Capture: {RATE} Hz, stereo PCM16 ({INPUT_CHANNELS}ch); explicit L/R -> mono downmix")
+    if monitor_dev is not None:
+        sd.check_output_settings(device=monitor_dev, channels=CHANNELS, dtype=DTYPE, samplerate=RATE)
+    print("GPT -> call input :", device_description(input_dev, "input"))
+    print("Call -> GPT output:", device_description(output_dev, "output"))
+    if monitor_dev is not None:
+        print("Local monitor     :", device_description(monitor_dev, "output"))
+    print(f"Capture: {RATE} Hz, {input_channels}ch PCM16 -> mono")
     print(f"Wire   : {RATE} Hz, mono, signed PCM16, {FRAMES} frames/{FRAME_BYTES} bytes per 10 ms")
+    print("IMPORTANT: ChatGPT microphone must be the recording side paired with --rx-output.")
+    print("IMPORTANT: ChatGPT speaker/output must feed the recording device selected by --tx-input.")
+    return input_channels
 
 
-def stereo_to_mono_pcm16(pcm):
-    if len(pcm) != INPUT_FRAME_BYTES:
-        raise RuntimeError(f"stereo capture frame size mismatch: got {len(pcm)} bytes, expected {INPUT_FRAME_BYTES}")
+def input_to_mono_pcm16(pcm, channels):
+    expected = FRAMES * channels * SAMPLE_BYTES
+    if len(pcm) != expected:
+        raise RuntimeError(f"capture frame size mismatch: got {len(pcm)} bytes, expected {expected}")
+    if channels == 1:
+        return pcm
     samples = array("h")
     samples.frombytes(pcm)
     mono = array("h", [0]) * FRAMES
     j = 0
     for i in range(FRAMES):
         mono[i] = (samples[j] + samples[j + 1]) // 2
-        j += 2
+        j += channels
     return mono.tobytes()
 
 
@@ -121,7 +150,7 @@ def rms_dbfs(pcm):
     return 20.0 * math.log10(rms / 32768.0)
 
 
-def handle(conn, input_dev, output_dev):
+def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None):
     # Voice PCM is sent in 10 ms packets. Disable Nagle so a short packet is never
     # held waiting for a previous ACK; latency matters more than throughput here.
     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -140,9 +169,15 @@ def handle(conn, input_dev, output_dev):
 
     out = sd.RawOutputStream(samplerate=RATE, channels=CHANNELS, dtype=DTYPE,
                              blocksize=FRAMES, device=output_dev, latency="low")
-    inp = sd.RawInputStream(samplerate=RATE, channels=INPUT_CHANNELS, dtype=DTYPE,
+    monitor = None
+    if monitor_dev is not None:
+        monitor = sd.RawOutputStream(samplerate=RATE, channels=CHANNELS, dtype=DTYPE,
+                                     blocksize=FRAMES, device=monitor_dev, latency="low")
+    inp = sd.RawInputStream(samplerate=RATE, channels=input_channels, dtype=DTYPE,
                             blocksize=FRAMES, device=input_dev, latency="low")
     out.start()
+    if monitor is not None:
+        monitor.start()
     inp.start()
 
     if abs(float(inp.samplerate) - RATE) > 1 or abs(float(out.samplerate) - RATE) > 1:
@@ -161,6 +196,8 @@ def handle(conn, input_dev, output_dev):
                 if len(payload) % SAMPLE_BYTES:
                     raise ConnectionError(f"unaligned caller PCM frame: {len(payload)} bytes")
                 out.write(payload)
+                if monitor is not None:
+                    monitor.write(payload)
                 with stats_lock:
                     stats["rx_frames"] += 1
                     stats["rx_bytes"] += len(payload)
@@ -194,7 +231,7 @@ def handle(conn, input_dev, output_dev):
     try:
         while not stop.is_set():
             data, overflow = inp.read(FRAMES)
-            payload = stereo_to_mono_pcm16(bytes(data))
+            payload = input_to_mono_pcm16(bytes(data), input_channels)
             if len(payload) != FRAME_BYTES:
                 raise RuntimeError(f"downmix frame size mismatch: got {len(payload)} bytes, expected {FRAME_BYTES}")
             with stats_lock:
@@ -206,7 +243,9 @@ def handle(conn, input_dev, output_dev):
             send_frame(conn, payload, lock)
     finally:
         stop.set()
-        for stream in (inp, out):
+        for stream in (inp, out, monitor):
+            if stream is None:
+                continue
             try:
                 stream.stop()
             except Exception:
@@ -219,8 +258,9 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--bind", default="0.0.0.0")
     p.add_argument("--port", type=int, default=28761)
-    p.add_argument("--input")
-    p.add_argument("--output")
+    p.add_argument("--tx-input", "--input", dest="input", help="Recording device carrying ChatGPT Voice output into the call")
+    p.add_argument("--rx-output", "--output", dest="output", help="Playback device whose paired recording endpoint is selected as ChatGPT Voice microphone")
+    p.add_argument("--monitor-output", help="Optional physical speaker/headset output to monitor caller audio locally")
     p.add_argument("--list-devices", action="store_true")
     a = p.parse_args()
 
@@ -232,7 +272,8 @@ def main():
 
     input_dev = resolve_device(a.input, "input")
     output_dev = resolve_device(a.output, "output")
-    validate_audio(input_dev, output_dev)
+    monitor_dev = resolve_device(a.monitor_output, "output") if a.monitor_output is not None else None
+    input_channels = validate_audio(input_dev, output_dev, monitor_dev)
 
     with socket.socket() as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -242,7 +283,7 @@ def main():
         while True:
             c, _ = s.accept()
             try:
-                handle(c, input_dev, output_dev)
+                handle(c, input_dev, output_dev, input_channels, monitor_dev)
             except Exception as e:
                 if is_expected_disconnect(e):
                     print("Phone bridge closed; listening for next connection")
