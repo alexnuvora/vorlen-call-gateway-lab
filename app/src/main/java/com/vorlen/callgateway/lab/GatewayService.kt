@@ -175,6 +175,11 @@ class GatewayService : Service() {
             bridgeEverActive=false
             ShellCallAudio.stopLaptopNetworkBridge()
             sendEvent("digital_bridge_disabled","manual",activeRequestId)
+            if(!running){
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+            return START_NOT_STICKY
         }
         val token=getSharedPreferences("gateway",MODE_PRIVATE).getString("device_token",null)
         if(token.isNullOrBlank()){stopGateway();return START_NOT_STICKY}
