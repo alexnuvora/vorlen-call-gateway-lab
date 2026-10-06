@@ -33,6 +33,9 @@ class GatewayService : Service() {
     @Volatile private var daemonReady=false
     private lateinit var telephony:TelephonyManager
 
+    private fun bridgeEnabled():Boolean =
+        getSharedPreferences("gateway",MODE_PRIVATE).getBoolean("laptop_bridge_enabled",false)
+
     @Suppress("DEPRECATION")
     private val phoneListener=object:PhoneStateListener(){
         override fun onCallStateChanged(state:Int,phoneNumber:String?){
@@ -46,8 +49,10 @@ class GatewayService : Service() {
         val name=when(state){TelephonyManager.CALL_STATE_RINGING->"ringing";TelephonyManager.CALL_STATE_OFFHOOK->"active";else->"idle"}
         if(state==TelephonyManager.CALL_STATE_OFFHOOK){
             sawOffHook=true
-            bridgePending=true
-            startDigitalBridgeIfConfigured()
+            if(bridgeEnabled()){
+                bridgePending=true
+                startDigitalBridgeIfConfigured()
+            }
         }
         val id=activeRequestId?:return
         if(state!=previous)sendEvent("call_state",name,id)
@@ -59,11 +64,17 @@ class GatewayService : Service() {
             requestStartedAtMs=0L
             bridgePending=false
             bridgeEverActive=false
+            // The per-call telephony stream ends here, but the persistent bridge
+            // preference remains enabled. The next call re-attaches automatically.
             ShellCallAudio.stopLaptopNetworkBridge()
         }
     }
 
     private fun startDigitalBridgeIfConfigured(){
+        if(!bridgeEnabled()){
+            bridgePending=false
+            return
+        }
         bridgePending=true
         if(bridgeRunning)return
         val prefs=getSharedPreferences("gateway",MODE_PRIVATE)
@@ -153,6 +164,18 @@ class GatewayService : Service() {
 
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{
         if(intent?.action==ACTION_STOP){stopGateway();return START_NOT_STICKY}
+        if(intent?.action==ACTION_ENABLE_BRIDGE){
+            getSharedPreferences("gateway",MODE_PRIVATE).edit().putBoolean("laptop_bridge_enabled",true).apply()
+            bridgePending=lastCallState==TelephonyManager.CALL_STATE_OFFHOOK || sawOffHook
+            if(bridgePending)startDigitalBridgeIfConfigured()
+        }
+        if(intent?.action==ACTION_DISABLE_BRIDGE){
+            getSharedPreferences("gateway",MODE_PRIVATE).edit().putBoolean("laptop_bridge_enabled",false).apply()
+            bridgePending=false
+            bridgeEverActive=false
+            ShellCallAudio.stopLaptopNetworkBridge()
+            sendEvent("digital_bridge_disabled","manual",activeRequestId)
+        }
         val token=getSharedPreferences("gateway",MODE_PRIVATE).getString("device_token",null)
         if(token.isNullOrBlank()){stopGateway();return START_NOT_STICKY}
         if(!running){
@@ -232,20 +255,20 @@ class GatewayService : Service() {
                 }else if(command!=null&&command.optString("action")=="call"){
                     val id=command.optString("id");val phone=command.optString("phone_number")
                     if(validNumber(phone)&&activeRequestId==null){
-                        activeRequestId=id;sawOffHook=lastCallState==TelephonyManager.CALL_STATE_OFFHOOK;requestStartedAtMs=SystemClock.elapsedRealtime();bridgePending=true;bridgeEverActive=false
+                        activeRequestId=id;sawOffHook=lastCallState==TelephonyManager.CALL_STATE_OFFHOOK;requestStartedAtMs=SystemClock.elapsedRealtime();bridgePending=bridgeEnabled();bridgeEverActive=false
                         val result=placeSimCall(phone)
                         if(!result.success){activeRequestId=null;sawOffHook=false;requestStartedAtMs=0L}
                         gatewayAck(token,id,if(result.success)"claimed" else "failed","request",if(result.success)null else result.message)
                         if(result.success){
                             sendEvent("call_requested",if(sawOffHook)"active" else "dialing",id)
-                            // Do not depend solely on PhoneStateListener: begin bridge
-                            // acquisition immediately after Android accepts placeCall().
-                            startDigitalBridgeIfConfigured()
+                            // Persistent bridge mode is armed once by the user and
+                            // automatically attaches to every subsequent call.
+                            if(bridgeEnabled())startDigitalBridgeIfConfigured()
                         }
                     }
                 }
                 reconcileCallState()
-                if(activeRequestId!=null && !bridgeRunning && bridgePending)startDigitalBridgeIfConfigured()
+                if(activeRequestId!=null && !bridgeRunning && bridgePending && bridgeEnabled())startDigitalBridgeIfConfigured()
 
                 // Keep proving the resident daemon independently of ADB. If it
                 // dies while ADB is still available, recover it proactively
@@ -312,5 +335,9 @@ class GatewayService : Service() {
     override fun onBind(intent:Intent?)=null
     data class CallResult(val success:Boolean,val message:String)
     private fun validNumber(n:String):Boolean{if(!n.matches(Regex("^\\+?[0-9]{7,15}$")))return false;return n.filter(Char::isDigit) !in setOf("999","112","911","000")}
-    companion object{const val ACTION_STOP="com.vorlen.callgateway.lab.STOP_GATEWAY";private const val CHANNEL="vorlen_gateway_session";private const val NOTIFICATION_ID=2001;private const val DEVICE_CODE="s24fe-digital";private const val GATEWAY_URL="https://mzkaodoruhklzluikagy.supabase.co/functions/v1/vorlen-call-device"}
+    companion object{
+        const val ACTION_STOP="com.vorlen.callgateway.lab.STOP_GATEWAY"
+        const val ACTION_ENABLE_BRIDGE="com.vorlen.callgateway.lab.ENABLE_BRIDGE"
+        const val ACTION_DISABLE_BRIDGE="com.vorlen.callgateway.lab.DISABLE_BRIDGE"
+        private const val CHANNEL="vorlen_gateway_session";private const val NOTIFICATION_ID=2001;private const val DEVICE_CODE="s24fe-digital";private const val GATEWAY_URL="https://mzkaodoruhklzluikagy.supabase.co/functions/v1/vorlen-call-device"}
 }
