@@ -30,6 +30,7 @@ class GatewayService : Service() {
     @Volatile private var bridgeRunning=false
     @Volatile private var bridgePending=false
     @Volatile private var bridgeEverActive=false
+    @Volatile private var daemonReady=false
     private lateinit var telephony:TelephonyManager
 
     @Suppress("DEPRECATION")
@@ -154,7 +155,22 @@ class GatewayService : Service() {
         if(intent?.action==ACTION_STOP){stopGateway();return START_NOT_STICKY}
         val token=getSharedPreferences("gateway",MODE_PRIVATE).getString("device_token",null)
         if(token.isNullOrBlank()){stopGateway();return START_NOT_STICKY}
-        if(!running){running=true;pollIo.execute{poll(token)}}
+        if(!running){
+            running=true
+            // Pre-warm the privileged audio daemon while Wireless Debugging is
+            // still available. Calls then use localhost only, so Samsung may
+            // disable Wireless Debugging without breaking the live bridge.
+            bridgeIo.execute{
+                val ready=runBlocking{ShellCallAudio.ensureResidentDaemon(this@GatewayService)}
+                daemonReady=ready.isSuccess && ShellCallAudio.ping()
+                if(daemonReady){
+                    sendEvent("audio_daemon_ready","resident",null)
+                }else{
+                    sendEvent("audio_daemon_unavailable",("bootstrap_"+(ready.exceptionOrNull()?.message?:"failed")).take(240),null)
+                }
+            }
+            pollIo.execute{poll(token)}
+        }
         return START_NOT_STICKY
     }
 
@@ -206,6 +222,20 @@ class GatewayService : Service() {
                 }
                 reconcileCallState()
                 if(activeRequestId!=null && !bridgeRunning && bridgePending)startDigitalBridgeIfConfigured()
+
+                // Keep proving the resident daemon independently of ADB. If it
+                // dies while ADB is still available, recover it proactively
+                // before the next call. If ADB is already gone, fail closed
+                // instead of pretending the bridge is healthy.
+                if(activeRequestId==null && !bridgeRunning && !ShellCallAudio.ping()){
+                    daemonReady=false
+                    val recovered=runBlocking{ShellCallAudio.ensureResidentDaemon(this@GatewayService)}
+                    daemonReady=recovered.isSuccess && ShellCallAudio.ping()
+                    if(daemonReady) sendEvent("audio_daemon_recovered","resident",null)
+                }else if(ShellCallAudio.ping()){
+                    daemonReady=true
+                }
+
                 enforcePlacementWatchdog()
                 Thread.sleep(3000)
             }catch(_:InterruptedException){Thread.currentThread().interrupt();break}
