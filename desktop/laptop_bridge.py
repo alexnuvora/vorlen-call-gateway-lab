@@ -33,6 +33,25 @@ INPUT_FRAME_BYTES = FRAMES * INPUT_CHANNELS * SAMPLE_BYTES
 MAGIC = b"VOR1"
 
 
+EXPECTED_DISCONNECT_ERRNOS = {10053, 10054, 10058}
+
+
+def is_expected_disconnect(exc):
+    """Return True for normal peer-close/reset conditions on Windows/TCP.
+
+    Android tears down the bridge socket when a cellular call ends. Windows may
+    surface that orderly lifecycle transition as WSAECONNRESET (10054) rather
+    than recv() returning b''. BrokenPipe/ConnectionAborted are equivalent from
+    the listener's point of view: the current bridge is over and the server
+    should immediately go back to accept().
+    """
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
+        return True
+    if isinstance(exc, ConnectionError) and str(exc) == "phone disconnected":
+        return True
+    return getattr(exc, "winerror", None) in EXPECTED_DISCONNECT_ERRNOS
+
+
 def recvall(sock, n):
     b = bytearray()
     while len(b) < n:
@@ -147,7 +166,10 @@ def handle(conn, input_dev, output_dev):
                     stats["rx_bytes"] += len(payload)
                     stats["rx_db"] = rms_dbfs(payload)
         except Exception as e:
-            print("Phone -> laptop audio failed:", repr(e))
+            if is_expected_disconnect(e):
+                print("Phone -> laptop audio closed")
+            else:
+                print("Phone -> laptop audio failed:", repr(e))
         finally:
             stop.set()
 
@@ -222,12 +244,18 @@ def main():
             try:
                 handle(c, input_dev, output_dev)
             except Exception as e:
-                print("Bridge disconnected:", repr(e))
+                if is_expected_disconnect(e):
+                    print("Phone bridge closed; listening for next connection")
+                else:
+                    print("Bridge failed:", repr(e))
                 try:
                     c.close()
                 except Exception:
                     pass
-                time.sleep(.5)
+                # Normal call teardown should be immediately ready for the next
+                # sequential call; only unexpected failures get a small backoff.
+                if not is_expected_disconnect(e):
+                    time.sleep(.5)
 
 
 if __name__ == "__main__":
