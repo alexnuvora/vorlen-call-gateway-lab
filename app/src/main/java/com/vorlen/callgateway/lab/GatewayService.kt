@@ -178,7 +178,31 @@ class GatewayService : Service() {
         while(running&&!Thread.currentThread().isInterrupted){
             try{
                 val command=gatewayGet(token).optJSONObject("command")
-                if(command!=null&&command.optString("action")=="hangup"){
+                if(command!=null&&command.optString("action")=="dtmf"){
+                    val id=command.optString("id")
+                    val requestId=command.optString("request_id")
+                    val payload=command.optJSONObject("payload") ?: JSONObject()
+                    val tones=payload.optString("tones").replace(Regex("\\s+"),"")
+                    val toneDuration=payload.optLong("tone_duration_ms",180L).coerceIn(70L,1000L)
+                    val gapMs=payload.optLong("gap_ms",120L).coerceIn(50L,2000L)
+                    val valid=tones.matches(Regex("^[0-9*#,]{1,64}$"))
+                    if(!valid){
+                        gatewayAck(token,id,"failed","command","Invalid DTMF sequence")
+                    }else if(activeRequestId==null || requestId.isBlank() || requestId!=activeRequestId || lastCallState!=TelephonyManager.CALL_STATE_OFFHOOK){
+                        gatewayAck(token,id,"failed","command","No matching active call for DTMF")
+                    }else{
+                        val result=VorlenCallControl.sendDtmf(tones,toneDuration,gapMs)
+                        result.fold(
+                            onSuccess={count->
+                                sendEvent("dtmf_sent","count_$count",requestId)
+                                gatewayAck(token,id,"completed","command",null)
+                            },
+                            onFailure={e->
+                                gatewayAck(token,id,"failed","command",(e.message?:"DTMF failed").take(240))
+                            }
+                        )
+                    }
+                }else if(command!=null&&command.optString("action")=="hangup"){
                     val id=command.optString("id"); val requestId=command.optString("request_id")
                     if(requestId.isBlank()||activeRequestId==null||requestId==activeRequestId){
                         val result=endSimCall()
