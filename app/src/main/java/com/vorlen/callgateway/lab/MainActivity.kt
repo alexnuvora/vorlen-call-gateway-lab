@@ -195,27 +195,41 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        val laptopBridgeState = findViewById<TextView>(R.id.laptopBridgeState)
+        fun refreshLaptopBridgeState() {
+            val enabled = prefs.getBoolean("laptop_bridge_enabled", false)
+            laptopBridgeState.text = if (enabled)
+                "Laptop bridge: ENABLED — stays armed across calls until you stop it"
+            else
+                "Laptop bridge: disabled"
+        }
+        refreshLaptopBridgeState()
+
         findViewById<Button>(R.id.startLaptopBridge).setOnClickListener {
-            // PhoneStateListener can report IDLE on some Samsung/One UI builds even
-            // while the cellular audio route is active. The shell daemon performs the
-            // authoritative MODE_IN_CALL check and fails closed when there is no call.
             val host = findViewById<EditText>(R.id.laptopIp).text.toString().trim()
             val port = findViewById<EditText>(R.id.laptopPort).text.toString().toIntOrNull() ?: 28761
             if (host.isBlank()) {
                 audioState.text = "Enter the laptop LAN IP address"
             } else {
-                audioState.text = "LAPTOP BRIDGE — checking cellular audio route and connecting to $host:$port…"
-                outboundIo.execute {
-                    val result = runBlocking {
-                        ShellCallAudio.runLaptopNetworkBridge(this@MainActivity, host, port) { ready ->
-                            runOnUiThread {
-                                audioState.text = "LAPTOP BRIDGE ACTIVE\n\nTELEPHONY DIAGNOSTICS\n$ready\n\nKeep this screen open or take a screenshot. These are the actual shell Telephony TX parameters."
-                            }
-                        }
-                    }
-                    runOnUiThread { audioState.text = result.report }
-                }
+                prefs.edit()
+                    .putString("laptop_host", host)
+                    .putInt("laptop_port", port)
+                    .putBoolean("laptop_bridge_enabled", true)
+                    .apply()
+                androidx.core.content.ContextCompat.startForegroundService(
+                    this,
+                    Intent(this, GatewayService::class.java).setAction(GatewayService.ACTION_ENABLE_BRIDGE)
+                )
+                audioState.text = "LAPTOP BRIDGE ENABLED — $host:$port\nIt will attach automatically to each call and reconnect if the socket drops."
+                refreshLaptopBridgeState()
             }
+        }
+
+        findViewById<Button>(R.id.stopLaptopBridge).setOnClickListener {
+            prefs.edit().putBoolean("laptop_bridge_enabled", false).apply()
+            startService(Intent(this, GatewayService::class.java).setAction(GatewayService.ACTION_DISABLE_BRIDGE))
+            audioState.text = "LAPTOP BRIDGE STOPPED — it will remain off until you enable it again."
+            refreshLaptopBridgeState()
         }
 
         findViewById<Button>(R.id.testChatGptCallBridge).setOnClickListener {
