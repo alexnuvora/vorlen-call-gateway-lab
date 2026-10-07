@@ -206,7 +206,11 @@ object ShellCallAudio {
             // an active/sequential calling session does not depend on Samsung
             // keeping Wireless Debugging enabled.
             ensureResidentDaemon(context).getOrThrow()
-            val shell = open(context, LAPTOP_BRIDGE.toByte())
+            val shell = try {
+                open(context, LAPTOP_BRIDGE.toByte())
+            } catch (t: Throwable) {
+                throw java.io.IOException("shell_open: " + (t.message ?: t.javaClass.simpleName), t)
+            }
             activeShellSocket = shell
             shell.soTimeout = 10_000
             val shellIn = java.io.DataInputStream(shell.getInputStream())
@@ -221,7 +225,11 @@ object ShellCallAudio {
             activeLaptopSocket = laptop
             laptop.keepAlive = true
             laptop.tcpNoDelay = true
-            laptop.connect(InetSocketAddress(host, port), 5000)
+            try {
+                laptop.connect(InetSocketAddress(host, port), 5000)
+            } catch (t: Throwable) {
+                throw java.io.IOException("laptop_connect $host:$port: " + (t.message ?: t.javaClass.simpleName), t)
+            }
             laptop.soTimeout = 10_000
             val laptopIn = java.io.DataInputStream(laptop.getInputStream())
             val laptopOut = java.io.DataOutputStream(laptop.getOutputStream())
@@ -262,6 +270,10 @@ object ShellCallAudio {
                 if (activeLaptopSocket === laptop) activeLaptopSocket = null
                 if (activeShellSocket === shell) activeShellSocket = null
                 runCatching { callerToLaptop.join(1500) }
+                // Samsung can keep the privileged telephony AudioRecord/AudioTrack
+                // endpoints busy for a short period after socket teardown. Give the
+                // daemon handler time to release them before an in-call reconnect.
+                try { Thread.sleep(350) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
             }
             error.get()?.let { throw it }
             TestResult(true, "LAPTOP BRIDGE ENDED")
