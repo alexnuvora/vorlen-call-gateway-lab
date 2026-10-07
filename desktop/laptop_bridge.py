@@ -163,7 +163,12 @@ def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None):
     except (AttributeError, OSError):
         pass
     print("Phone connected:", conn.getpeername(), "TCP_NODELAY=1 KEEPALIVE=1")
-    if recvall(conn, 4) != MAGIC:
+    hello = recvall(conn, 4)
+    if hello == b"VORP":
+        conn.sendall(b"PONG")
+        print("Bridge preflight OK")
+        return
+    if hello != MAGIC:
         raise ConnectionError("bad handshake")
     conn.sendall(MAGIC)
 
