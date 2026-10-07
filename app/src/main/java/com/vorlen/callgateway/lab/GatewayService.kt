@@ -31,6 +31,7 @@ class GatewayService : Service() {
     @Volatile private var bridgePending=false
     @Volatile private var bridgeEverActive=false
     @Volatile private var daemonReady=false
+    @Volatile private var lastBridgeFailure:String?=null
     private lateinit var telephony:TelephonyManager
 
     private fun bridgeEnabled():Boolean =
@@ -96,6 +97,7 @@ class GatewayService : Service() {
                             if(activeRequestId==bridgeRequestId){
                                 bridgePending=false
                                 bridgeEverActive=true
+                                lastBridgeFailure=null
                                 sendEvent("digital_bridge_active","active",bridgeRequestId)
                             }
                         }
@@ -114,18 +116,22 @@ class GatewayService : Service() {
                     // half-open sockets, allow the shell AudioRecord/AudioTrack handler
                     // to release, then reacquire with bounded exponential backoff.
                     bridgePending=true
+                    lastBridgeFailure=result.report
                     ShellCallAudio.stopLaptopNetworkBridge()
                     if(bridgeEverActive){
                         sendEvent("digital_bridge_reconnect",("reconnect_"+result.report).take(240),bridgeRequestId)
                     } else {
                         sendEvent("digital_bridge_retry",("retry_"+result.report).take(240),bridgeRequestId)
                     }
-                    val reconnectAttempt = if (bridgeEverActive) 1 else 0
-                    val backoffMs = if (reconnectAttempt > 0) 2000L else 1000L
-                    Thread.sleep(backoffMs)
+                    // The Samsung telephony AudioRecord/AudioTrack endpoints can
+                    // remain busy briefly after a socket dies. Give both the shell
+                    // handler and Windows listener time to return to a clean accept
+                    // state before opening the next duplex session.
+                    Thread.sleep(if(bridgeEverActive) 2500L else 1200L)
                 }
                 if(bridgePending && !bridgeEverActive && activeRequestId==bridgeRequestId && bridgeRequestId!=null){
-                    sendEvent("digital_bridge_failed","timeout_no_laptop_handshake",bridgeRequestId)
+                    val detail=(lastBridgeFailure ?: "timeout_no_laptop_handshake").take(220)
+                    sendEvent("digital_bridge_failed",("timeout_"+detail).take(240),bridgeRequestId)
                     bridgePending=false
                 }
             }catch(_:InterruptedException){
@@ -215,14 +221,21 @@ class GatewayService : Service() {
                     val requestId=command.optString("request_id")
                     val payload=command.optJSONObject("payload") ?: JSONObject()
                     val tones=payload.optString("tones").replace(Regex("\\s+"),"")
-                    val toneDuration=payload.optLong("tone_duration_ms",180L).coerceIn(70L,1000L)
-                    val gapMs=payload.optLong("gap_ms",120L).coerceIn(50L,2000L)
+                    // 250 ms is much more reliably recognised by corporate IVRs
+                    // than the previous 180 ms while still feeling immediate.
+                    val toneDuration=maxOf(250L,payload.optLong("tone_duration_ms",250L)).coerceIn(70L,1000L)
+                    val gapMs=maxOf(150L,payload.optLong("gap_ms",150L)).coerceIn(50L,2000L)
                     val valid=tones.matches(Regex("^[0-9*#,]{1,64}$"))
                     if(!valid){
                         gatewayAck(token,id,"failed","command","Invalid DTMF sequence")
                     }else if(activeRequestId==null || requestId.isBlank() || requestId!=activeRequestId || lastCallState!=TelephonyManager.CALL_STATE_OFFHOOK){
                         gatewayAck(token,id,"failed","command","No matching active call for DTMF")
                     }else{
+                        // Claim before generating tones so the command lifecycle proves
+                        // that the handset actually received it. The final ACK then
+                        // distinguishes successful keypad delivery from a local failure.
+                        gatewayAck(token,id,"claimed","command",null)
+                        sendEvent("dtmf_received","count_"+tones.count{it!=','},requestId)
                         val result=VorlenCallControl.sendDtmf(tones,toneDuration,gapMs)
                         result.fold(
                             onSuccess={count->
@@ -230,6 +243,7 @@ class GatewayService : Service() {
                                 gatewayAck(token,id,"completed","command",null)
                             },
                             onFailure={e->
+                                sendEvent("dtmf_failed",(e.message?:"DTMF failed").take(220),requestId)
                                 gatewayAck(token,id,"failed","command",(e.message?:"DTMF failed").take(240))
                             }
                         )
@@ -264,15 +278,45 @@ class GatewayService : Service() {
                 }else if(command!=null&&command.optString("action")=="call"){
                     val id=command.optString("id");val phone=command.optString("phone_number")
                     if(validNumber(phone)&&activeRequestId==null){
-                        activeRequestId=id;sawOffHook=lastCallState==TelephonyManager.CALL_STATE_OFFHOOK;requestStartedAtMs=SystemClock.elapsedRealtime();bridgePending=bridgeEnabled();bridgeEverActive=false
-                        val result=placeSimCall(phone)
-                        if(!result.success){activeRequestId=null;sawOffHook=false;requestStartedAtMs=0L}
-                        gatewayAck(token,id,if(result.success)"claimed" else "failed","request",if(result.success)null else result.message)
-                        if(result.success){
-                            sendEvent("call_requested",if(sawOffHook)"active" else "dialing",id)
-                            // Persistent bridge mode is armed once by the user and
-                            // automatically attaches to every subsequent call.
-                            if(bridgeEnabled())startDigitalBridgeIfConfigured()
+                        var preflightError:String?=null
+                        if(bridgeEnabled()){
+                            // Never place a client call while the previous bridge worker is
+                            // still unwinding. This was the race that allowed the next
+                            // handset call to connect while the digital path was unavailable.
+                            val waitUntil=SystemClock.elapsedRealtime()+6000L
+                            while(bridgeRunning && SystemClock.elapsedRealtime()<waitUntil){
+                                Thread.sleep(100)
+                            }
+                            if(bridgeRunning){
+                                ShellCallAudio.stopLaptopNetworkBridge()
+                                preflightError="previous_bridge_still_closing"
+                            }else{
+                                val prefs=getSharedPreferences("gateway",MODE_PRIVATE)
+                                val host=prefs.getString("laptop_host","192.168.1.4")?.trim().orEmpty()
+                                val port=prefs.getInt("laptop_port",28761)
+                                val daemon=runBlocking{ShellCallAudio.ensureResidentDaemon(this@GatewayService)}
+                                if(daemon.isFailure || !ShellCallAudio.ping()){
+                                    preflightError="audio_daemon_unavailable: "+(daemon.exceptionOrNull()?.message?:"ping failed")
+                                }else{
+                                    val laptop=runBlocking{ShellCallAudio.preflightLaptopBridge(host,port)}
+                                    if(laptop.isFailure){
+                                        preflightError="laptop_preflight: "+(laptop.exceptionOrNull()?.message?:"failed")
+                                    }
+                                }
+                            }
+                        }
+                        if(preflightError!=null){
+                            sendEvent("digital_bridge_preflight_failed",preflightError.take(240),id)
+                            gatewayAck(token,id,"failed","request",preflightError.take(500))
+                        }else{
+                            activeRequestId=id;sawOffHook=lastCallState==TelephonyManager.CALL_STATE_OFFHOOK;requestStartedAtMs=SystemClock.elapsedRealtime();bridgePending=bridgeEnabled();bridgeEverActive=false;lastBridgeFailure=null
+                            val result=placeSimCall(phone)
+                            if(!result.success){activeRequestId=null;sawOffHook=false;requestStartedAtMs=0L}
+                            gatewayAck(token,id,if(result.success)"claimed" else "failed","request",if(result.success)null else result.message)
+                            if(result.success){
+                                sendEvent("call_requested",if(sawOffHook)"active" else "dialing",id)
+                                if(bridgeEnabled())startDigitalBridgeIfConfigured()
+                            }
                         }
                     }
                 }
@@ -283,17 +327,21 @@ class GatewayService : Service() {
                 // dies while ADB is still available, recover it proactively
                 // before the next call. If ADB is already gone, fail closed
                 // instead of pretending the bridge is healthy.
-                if(activeRequestId==null && !bridgeRunning && !ShellCallAudio.ping()){
-                    daemonReady=false
-                    val recovered=runBlocking{ShellCallAudio.ensureResidentDaemon(this@GatewayService)}
-                    daemonReady=recovered.isSuccess && ShellCallAudio.ping()
-                    if(daemonReady) sendEvent("audio_daemon_recovered","resident",null)
-                }else if(ShellCallAudio.ping()){
-                    daemonReady=true
+                if(activeRequestId==null && !bridgeRunning){
+                    if(!ShellCallAudio.ping()){
+                        daemonReady=false
+                        val recovered=runBlocking{ShellCallAudio.ensureResidentDaemon(this@GatewayService)}
+                        daemonReady=recovered.isSuccess && ShellCallAudio.ping()
+                        if(daemonReady) sendEvent("audio_daemon_recovered","resident",null)
+                    }else{
+                        daemonReady=true
+                    }
                 }
 
                 enforcePlacementWatchdog()
-                Thread.sleep(3000)
+                // DTMF is interactive. Poll quickly while a call is active so an
+                // IVR keypress arrives in hundreds of milliseconds, not several seconds.
+                Thread.sleep(if(activeRequestId!=null) 500L else 2000L)
             }catch(_:InterruptedException){Thread.currentThread().interrupt();break}
             catch(_:Exception){try{Thread.sleep(5000)}catch(_:InterruptedException){break}}
         }
