@@ -15,7 +15,7 @@ object VorlenCallControl {
         active.compareAndSet(call, null)
     }
 
-    fun hasActiveCall(): Boolean = active.get() != null
+    fun hasActiveCall(): Boolean = active.get()?.state?.let { it != Call.STATE_DISCONNECTED && it != Call.STATE_DISCONNECTING } == true
 
     fun sendDtmf(sequence: String, toneDurationMs: Long, gapMs: Long): Result<Int> = runCatching {
         val call = active.get() ?: error("No Telecom call is attached. Enable Vorlen as the default phone app for DTMF control.")
@@ -29,9 +29,13 @@ object VorlenCallControl {
                 Thread.sleep(maxOf(350L, gapMs * 3))
                 continue
             }
+            check(call.state != Call.STATE_DISCONNECTED && call.state != Call.STATE_DISCONNECTING) { "Call disconnected before DTMF could be sent" }
             call.playDtmfTone(ch)
-            Thread.sleep(toneDurationMs)
-            call.stopDtmfTone()
+            try {
+                Thread.sleep(toneDurationMs)
+            } finally {
+                call.stopDtmfTone()
+            }
             sent++
             Thread.sleep(gapMs)
         }
