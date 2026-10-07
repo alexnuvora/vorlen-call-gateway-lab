@@ -154,7 +154,15 @@ def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None):
     # Voice PCM is sent in 10 ms packets. Disable Nagle so a short packet is never
     # held waiting for a previous ACK; latency matters more than throughput here.
     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    print("Phone connected:", conn.getpeername(), "TCP_NODELAY=1")
+    conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    # Best-effort Windows keepalive tuning. This helps detect dead Wi-Fi/NAT
+    # sessions without killing healthy long calls. Unsupported platforms simply
+    # keep the default SO_KEEPALIVE behaviour.
+    try:
+        conn.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 15000, 3000))
+    except (AttributeError, OSError):
+        pass
+    print("Phone connected:", conn.getpeername(), "TCP_NODELAY=1 KEEPALIVE=1")
     if recvall(conn, 4) != MAGIC:
         raise ConnectionError("bad handshake")
     conn.sendall(MAGIC)
@@ -275,28 +283,41 @@ def main():
     monitor_dev = resolve_device(a.monitor_output, "output") if a.monitor_output is not None else None
     input_channels = validate_audio(input_dev, output_dev, monitor_dev)
 
-    with socket.socket() as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind((a.bind, a.port))
-        s.listen(1)
-        print(f"Vorlen laptop bridge listening on {a.bind}:{a.port}")
-        while True:
-            c, _ = s.accept()
-            try:
-                handle(c, input_dev, output_dev, input_channels, monitor_dev)
-            except Exception as e:
-                if is_expected_disconnect(e):
-                    print("Phone bridge closed; listening for next connection")
-                else:
-                    print("Bridge failed:", repr(e))
-                try:
-                    c.close()
-                except Exception:
-                    pass
-                # Normal call teardown should be immediately ready for the next
-                # sequential call; only unexpected failures get a small backoff.
-                if not is_expected_disconnect(e):
-                    time.sleep(.5)
+    # Supervisor loop: never let a transient listener/session exception kill the
+    # desktop bridge process. Re-create the listening socket if Windows/network
+    # state invalidates it, while preserving immediate readiness after normal
+    # cellular call teardown.
+    while True:
+        try:
+            with socket.socket() as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind((a.bind, a.port))
+                s.listen(4)
+                print(f"Vorlen laptop bridge listening on {a.bind}:{a.port}")
+                while True:
+                    try:
+                        c, _ = s.accept()
+                    except OSError as e:
+                        print("Listener accept failed; rebuilding listener:", repr(e))
+                        break
+                    try:
+                        handle(c, input_dev, output_dev, input_channels, monitor_dev)
+                    except Exception as e:
+                        if is_expected_disconnect(e):
+                            print("Phone bridge closed; listening for next connection")
+                        else:
+                            print("Bridge session failed:", repr(e))
+                        try:
+                            c.close()
+                        except Exception:
+                            pass
+                        if not is_expected_disconnect(e):
+                            time.sleep(.25)
+        except KeyboardInterrupt:
+            raise
+        except OSError as e:
+            print("Listener failed; retrying:", repr(e))
+            time.sleep(1.0)
 
 
 if __name__ == "__main__":
