@@ -189,6 +189,25 @@ object ShellCallAudio {
         }
     }
 
+    suspend fun preflightLaptopBridge(host: String, port: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(host.isNotBlank()) { "Laptop IP is required" }
+            require(port in 1..65535) { "Invalid laptop port" }
+            Socket().use { socket ->
+                socket.tcpNoDelay = true
+                socket.keepAlive = true
+                socket.connect(InetSocketAddress(host, port), 2500)
+                socket.soTimeout = 2500
+                val out = socket.getOutputStream()
+                out.write(byteArrayOf('V'.code.toByte(),'O'.code.toByte(),'R'.code.toByte(),'P'.code.toByte()))
+                out.flush()
+                val ack = ByteArray(4)
+                java.io.DataInputStream(socket.getInputStream()).readFully(ack)
+                check(String(ack, Charsets.US_ASCII) == "PONG") { "Laptop listener did not acknowledge preflight" }
+            }
+        }
+    }
+
     private fun expectedBridgeClose(t: Throwable): Boolean {
         if (t is EOFException || t is SocketException) {
             val m = (t.message ?: "").lowercase()
@@ -250,7 +269,9 @@ object ShellCallAudio {
                         synchronized(laptopOut) { laptopOut.writeInt(n); laptopOut.write(pcm); laptopOut.flush() }
                     }
                 } catch (t: Throwable) {
-                    if (running.get() || !expectedBridgeClose(t)) error.set(t)
+                    if (running.get() || !expectedBridgeClose(t)) {
+                        error.set(java.io.IOException("caller_to_laptop: " + (t.message ?: t.javaClass.simpleName), t))
+                    }
                 } finally { running.set(false) }
             }, "vorlen-caller-to-laptop")
             callerToLaptop.start()
@@ -261,6 +282,10 @@ object ShellCallAudio {
                     if (n <= 0 || n > 192_000) break
                     val pcm = ByteArray(n); laptopIn.readFully(pcm)
                     synchronized(shellOut) { shellOut.writeInt(n); shellOut.write(pcm); shellOut.flush() }
+                }
+            } catch (t: Throwable) {
+                if (!expectedBridgeClose(t)) {
+                    throw java.io.IOException("laptop_to_caller: " + (t.message ?: t.javaClass.simpleName), t)
                 }
             } finally {
                 running.set(false)
@@ -273,7 +298,7 @@ object ShellCallAudio {
                 // Samsung can keep the privileged telephony AudioRecord/AudioTrack
                 // endpoints busy for a short period after socket teardown. Give the
                 // daemon handler time to release them before an in-call reconnect.
-                try { Thread.sleep(350) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+                try { Thread.sleep(750) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
             }
             error.get()?.let { throw it }
             TestResult(true, "LAPTOP BRIDGE ENDED")
