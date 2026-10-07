@@ -22,6 +22,8 @@ class GatewayService : Service() {
     private val pollIo=Executors.newSingleThreadExecutor()
     private val outboundIo=Executors.newSingleThreadExecutor()
     private val bridgeIo=Executors.newSingleThreadExecutor()
+    private val daemonIo=Executors.newSingleThreadExecutor()
+    private val daemonRecoveryLock=Any()
     @Volatile private var running=false
     @Volatile private var activeRequestId:String?=null
     @Volatile private var sawOffHook=false
@@ -31,6 +33,9 @@ class GatewayService : Service() {
     @Volatile private var bridgePending=false
     @Volatile private var bridgeEverActive=false
     @Volatile private var daemonReady=false
+    @Volatile private var daemonHealthyStreak=0
+    @Volatile private var daemonLastHealthyAtMs=0L
+    @Volatile private var lastDaemonFailure:String?=null
     @Volatile private var lastBridgeFailure:String?=null
     private lateinit var telephony:TelephonyManager
 
@@ -145,6 +150,112 @@ class GatewayService : Service() {
         }
     }
 
+    private fun recoverDaemonBlocking():Result<Unit> = synchronized(daemonRecoveryLock){
+        runBlocking{ShellCallAudio.ensureResidentDaemon(this@GatewayService)}
+    }
+
+    private fun markDaemonHealthy(){
+        daemonReady=true
+        daemonHealthyStreak=(daemonHealthyStreak+1).coerceAtMost(3)
+        daemonLastHealthyAtMs=SystemClock.elapsedRealtime()
+        lastDaemonFailure=null
+    }
+
+    private fun daemonHealthyEnough():Boolean =
+        daemonReady && daemonHealthyStreak>=2 &&
+            SystemClock.elapsedRealtime()-daemonLastHealthyAtMs <= 6_000L
+
+    private fun waitForDaemonHealthy(timeoutMs:Long=10_000L):Result<Unit>{
+        val deadline=SystemClock.elapsedRealtime()+timeoutMs
+        var lastError="daemon health check timed out"
+        while(running && SystemClock.elapsedRealtime()<deadline){
+            if(ShellCallAudio.ping()){
+                markDaemonHealthy()
+                Thread.sleep(250)
+                if(ShellCallAudio.ping()){
+                    markDaemonHealthy()
+                    return Result.success(Unit)
+                }
+                lastError="daemon ping failed on stability confirmation"
+            }else{
+                daemonReady=false
+                daemonHealthyStreak=0
+                val recovered=recoverDaemonBlocking()
+                if(recovered.isFailure){
+                    lastError=recovered.exceptionOrNull()?.message ?: "daemon recovery failed"
+                    lastDaemonFailure=lastError
+                }else{
+                    Thread.sleep(300)
+                }
+            }
+        }
+        daemonReady=false
+        daemonHealthyStreak=0
+        lastDaemonFailure=lastError
+        return Result.failure(IllegalStateException(lastError))
+    }
+
+    private fun superviseDaemon(){
+        var reportedHealthy=false
+        var backoffMs=1_000L
+        while(running&&!Thread.currentThread().isInterrupted){
+            try{
+                // Do not probe/restart the shell process while its long-lived audio
+                // session owns the daemon. Supervision resumes immediately after the
+                // call/bridge worker releases it.
+                if(activeRequestId!=null || bridgeRunning){
+                    Thread.sleep(750)
+                    continue
+                }
+
+                if(ShellCallAudio.ping()){
+                    markDaemonHealthy()
+                    backoffMs=1_000L
+                    if(!reportedHealthy && daemonHealthyStreak>=2){
+                        sendEvent("audio_daemon_ready","resident_supervised",null)
+                        reportedHealthy=true
+                    }
+                    Thread.sleep(1_500)
+                    continue
+                }
+
+                daemonReady=false
+                daemonHealthyStreak=0
+                if(reportedHealthy){
+                    sendEvent("audio_daemon_lost","ping_failed",null)
+                    reportedHealthy=false
+                }
+
+                val recovered=recoverDaemonBlocking()
+                if(recovered.isSuccess && ShellCallAudio.ping()){
+                    markDaemonHealthy()
+                    Thread.sleep(300)
+                    if(ShellCallAudio.ping()){
+                        markDaemonHealthy()
+                        sendEvent("audio_daemon_recovered","resident_supervised",null)
+                        reportedHealthy=true
+                        backoffMs=1_000L
+                        continue
+                    }
+                }
+
+                lastDaemonFailure=recovered.exceptionOrNull()?.message ?: "ping failed after recovery"
+                sendEvent("audio_daemon_recovery_failed",lastDaemonFailure!!.take(240),null)
+                Thread.sleep(backoffMs)
+                backoffMs=(backoffMs*2).coerceAtMost(10_000L)
+            }catch(_:InterruptedException){
+                Thread.currentThread().interrupt()
+                break
+            }catch(t:Throwable){
+                daemonReady=false
+                daemonHealthyStreak=0
+                lastDaemonFailure=t.message ?: t.javaClass.simpleName
+                try{Thread.sleep(backoffMs)}catch(_:InterruptedException){Thread.currentThread().interrupt();break}
+                backoffMs=(backoffMs*2).coerceAtMost(10_000L)
+            }
+        }
+    }
+
     private fun reconcileCallState(){
         if(ActivityCompat.checkSelfPermission(this,Manifest.permission.READ_PHONE_STATE)!=PackageManager.PERMISSION_GRANTED)return
         try{
@@ -195,21 +306,15 @@ class GatewayService : Service() {
         if(token.isNullOrBlank()){stopGateway();return START_NOT_STICKY}
         if(!running){
             running=true
-            // Pre-warm the privileged audio daemon while Wireless Debugging is
-            // still available. Calls then use localhost only, so Samsung may
-            // disable Wireless Debugging without breaking the live bridge.
-            bridgeIo.execute{
-                val ready=runBlocking{ShellCallAudio.ensureResidentDaemon(this@GatewayService)}
-                daemonReady=ready.isSuccess && ShellCallAudio.ping()
-                if(daemonReady){
-                    sendEvent("audio_daemon_ready","resident",null)
-                }else{
-                    sendEvent("audio_daemon_unavailable",("bootstrap_"+(ready.exceptionOrNull()?.message?:"failed")).take(240),null)
-                }
-            }
+            // Dedicated daemon supervisor. It continuously proves localhost health
+            // and self-heals the privileged shell process between calls rather than
+            // waiting for the next customer call to discover that Android killed it.
+            daemonIo.execute{superviseDaemon()}
             pollIo.execute{poll(token)}
         }
-        return START_NOT_STICKY
+        // This is a user-approved foreground calling session. If Android reclaims
+        // the process, recreate the service and resume supervision/polling.
+        return START_STICKY
     }
 
     private fun poll(token:String){
@@ -294,9 +399,12 @@ class GatewayService : Service() {
                                 val prefs=getSharedPreferences("gateway",MODE_PRIVATE)
                                 val host=prefs.getString("laptop_host","192.168.1.4")?.trim().orEmpty()
                                 val port=prefs.getInt("laptop_port",28761)
-                                val daemon=runBlocking{ShellCallAudio.ensureResidentDaemon(this@GatewayService)}
-                                if(daemon.isFailure || !ShellCallAudio.ping()){
-                                    preflightError="audio_daemon_unavailable: "+(daemon.exceptionOrNull()?.message?:"ping failed")
+                                // Require two consecutive daemon health proofs immediately
+                                // before dialling. If Android killed the shell daemon, recover it
+                                // here and fail closed unless it remains stable.
+                                val daemon=if(daemonHealthyEnough()) Result.success(Unit) else waitForDaemonHealthy(10_000L)
+                                if(daemon.isFailure){
+                                    preflightError="audio_daemon_unavailable: "+(daemon.exceptionOrNull()?.message?:lastDaemonFailure?:"health check failed")
                                 }else{
                                     val laptop=runBlocking{ShellCallAudio.preflightLaptopBridge(host,port)}
                                     if(laptop.isFailure){
@@ -322,21 +430,6 @@ class GatewayService : Service() {
                 }
                 reconcileCallState()
                 if(activeRequestId!=null && !bridgeRunning && bridgePending && bridgeEnabled())startDigitalBridgeIfConfigured()
-
-                // Keep proving the resident daemon independently of ADB. If it
-                // dies while ADB is still available, recover it proactively
-                // before the next call. If ADB is already gone, fail closed
-                // instead of pretending the bridge is healthy.
-                if(activeRequestId==null && !bridgeRunning){
-                    if(!ShellCallAudio.ping()){
-                        daemonReady=false
-                        val recovered=runBlocking{ShellCallAudio.ensureResidentDaemon(this@GatewayService)}
-                        daemonReady=recovered.isSuccess && ShellCallAudio.ping()
-                        if(daemonReady) sendEvent("audio_daemon_recovered","resident",null)
-                    }else{
-                        daemonReady=true
-                    }
-                }
 
                 enforcePlacementWatchdog()
                 // DTMF is interactive. Poll quickly while a call is active so an
@@ -387,8 +480,8 @@ class GatewayService : Service() {
         val stop=PendingIntent.getService(this,1,Intent(this,GatewayService::class.java).setAction(ACTION_STOP),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.sym_action_call).setContentTitle("Vorlen Call Gateway").setContentText("Calling session approved — gateway active").setOngoing(true).setContentIntent(open).addAction(android.R.drawable.ic_menu_close_clear_cancel,"End session",stop).build()
     }
-    private fun stopGateway(){running=false;bridgePending=false;bridgeEverActive=false;ShellCallAudio.stopLaptopNetworkBridge();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()}
-    override fun onDestroy(){running=false;bridgePending=false;bridgeEverActive=false;ShellCallAudio.stopLaptopNetworkBridge();if(::telephony.isInitialized){@Suppress("DEPRECATION") telephony.listen(phoneListener,PhoneStateListener.LISTEN_NONE)};pollIo.shutdownNow();outboundIo.shutdownNow();bridgeIo.shutdownNow();super.onDestroy()}
+    private fun stopGateway(){running=false;daemonReady=false;daemonHealthyStreak=0;bridgePending=false;bridgeEverActive=false;ShellCallAudio.stopLaptopNetworkBridge();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()}
+    override fun onDestroy(){running=false;daemonReady=false;daemonHealthyStreak=0;bridgePending=false;bridgeEverActive=false;ShellCallAudio.stopLaptopNetworkBridge();if(::telephony.isInitialized){@Suppress("DEPRECATION") telephony.listen(phoneListener,PhoneStateListener.LISTEN_NONE)};pollIo.shutdownNow();outboundIo.shutdownNow();bridgeIo.shutdownNow();daemonIo.shutdownNow();super.onDestroy()}
     override fun onBind(intent:Intent?)=null
     data class CallResult(val success:Boolean,val message:String)
     private fun validNumber(n:String):Boolean{if(!n.matches(Regex("^\\+?[0-9]{7,15}$")))return false;return n.filter(Char::isDigit) !in setOf("999","112","911","000")}
