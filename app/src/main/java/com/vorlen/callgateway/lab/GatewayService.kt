@@ -110,15 +110,19 @@ class GatewayService : Service() {
                     }
 
                     // A bridge ending while the same cellular call is still active is
-                    // transport loss, not call completion. Keep reacquiring the
-                    // daemon/laptop path without ending the call.
+                    // transport loss, not call completion. Explicitly tear down any
+                    // half-open sockets, allow the shell AudioRecord/AudioTrack handler
+                    // to release, then reacquire with bounded exponential backoff.
                     bridgePending=true
+                    ShellCallAudio.stopLaptopNetworkBridge()
                     if(bridgeEverActive){
                         sendEvent("digital_bridge_reconnect",("reconnect_"+result.report).take(240),bridgeRequestId)
                     } else {
                         sendEvent("digital_bridge_retry",("retry_"+result.report).take(240),bridgeRequestId)
                     }
-                    Thread.sleep(1000)
+                    val reconnectAttempt = if (bridgeEverActive) 1 else 0
+                    val backoffMs = if (reconnectAttempt > 0) 2000L else 1000L
+                    Thread.sleep(backoffMs)
                 }
                 if(bridgePending && !bridgeEverActive && activeRequestId==bridgeRequestId && bridgeRequestId!=null){
                     sendEvent("digital_bridge_failed","timeout_no_laptop_handshake",bridgeRequestId)
