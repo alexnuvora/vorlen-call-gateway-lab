@@ -16,6 +16,13 @@ s=s.replace("private static final int COMMAND_RECORD = 'R';","""private static f
     private static final int COMMAND_REVERSE_BRIDGE = 'H';\n    private static final int COMMAND_LAPTOP_BRIDGE = 'L';""")
 anchor="""        if (command == COMMAND_RECORD) {"""
 handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
+            // Main.session() applies a short command-header timeout to every
+            // connection. This command is a long-lived full-duplex stream, so
+            // remove that timeout after authentication or a quiet/stalled audio
+            // interval can tear down an otherwise healthy phone call bridge.
+            client.setSoTimeout(0);
+            client.setTcpNoDelay(true);
+            client.setKeepAlive(true);
             OutputStream os = client.getOutputStream();
             AudioRecord rx = null;
             AudioTrack tx = null;
