@@ -553,7 +553,9 @@ class MainActivity : AppCompatActivity() {
             if (token.length < 24) remoteState.text = "Remote gateway: enter pairing credential"
             else { prefs.edit().putString("device_token", token).apply(); testGateway(token, remoteState) }
         }
-        prefs.getString("device_token", null)?.takeIf { it.length >= 24 }?.let { testGateway(it, remoteState) }
+        if (prefs.getString("device_token", null)?.length ?: 0 >= 24) {
+            remoteState.text = "Remote gateway: saved credential — tap Connect"
+        }
 
         findViewById<Button>(R.id.call).setOnClickListener {
             val result = placeSimCall(number.text.toString().trim())
@@ -686,9 +688,9 @@ class MainActivity : AppCompatActivity() {
         remoteState.text = "Remote gateway: connecting..."
         pollingIo.execute {
             try {
-                val response = gatewayGet(token)
+                gatewayGet(token)
                 runOnUiThread { remoteState.text = "Remote gateway: connected" }
-                if (!polling) { polling = true; pollGateway(token, remoteState, response) }
+                // GatewayService exclusively owns polling; the Activity only tests credentials.
             } catch (e: Exception) {
                 runOnUiThread { remoteState.text = "Remote gateway: " + (e.message ?: "connection failed") }
             }
