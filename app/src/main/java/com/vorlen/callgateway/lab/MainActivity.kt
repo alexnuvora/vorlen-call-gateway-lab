@@ -95,12 +95,10 @@ class MainActivity : AppCompatActivity() {
             val bridgePort = laptopPortView.text.toString().toIntOrNull() ?: 28761
             when {
                 token.length < 24 -> {
-                    connectionSummary.text = "First-time setup: enter the Vorlen gateway credential under Advanced."
-                    advancedPanel.visibility = View.VISIBLE
+                    connectionSummary.text = "Setup needed: gateway credential missing. Tap Advanced setup & diagnostics to enter it."
                 }
                 bridgeHost.isBlank() || bridgePort !in 1..65535 -> {
-                    connectionSummary.text = "Set a valid laptop address and port under Advanced."
-                    advancedPanel.visibility = View.VISIBLE
+                    connectionSummary.text = "Setup needed: laptop address or port is invalid. Open Advanced setup to correct it."
                 }
                 else -> {
                     connectButton.isEnabled = false
@@ -148,11 +146,9 @@ class MainActivity : AppCompatActivity() {
                                 onFailure = { error ->
                                     sessionApproved = false
                                     connectionSummary.text =
-                                        "Connection incomplete: ${error.message ?: "unknown error"}. " +
-                                        "If Wireless Debugging is off or pairing expired, enable it in Android " +
-                                        "Developer Options and use Advanced pairing once."
-                                    advancedPanel.visibility = View.VISIBLE
-                                }
+                                        "Not connected: ${error.message ?: "unknown error"}. " +
+                                        "Check Wireless Debugging in Android Settings; open Advanced only if pairing is required."
+                                                }
                             )
                         }
                     }
