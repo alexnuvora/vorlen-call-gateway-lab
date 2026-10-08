@@ -1,3 +1,3 @@
 <resources>
-    <style name="Theme.AICallGateway" parent="Theme.AppCompat.DayNight.NoActionBar"/>
+    <style name="Theme.AICallGateway" parent="Theme.AppCompat.DayNight.NoActionBar">\n        <item name="colorPrimary">#0EA5E9</item>\n        <item name="colorPrimaryDark">#0A1422</item>\n        <item name="colorAccent">#38BDF8</item>\n        <item name="android:statusBarColor">#0A1422</item>\n        <item name="android:navigationBarColor">#0A1422</item>\n        <item name="android:windowLightStatusBar">false</item>\n    </style>
 </resources>
