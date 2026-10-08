@@ -553,7 +553,7 @@ class MainActivity : AppCompatActivity() {
             if (token.length < 24) remoteState.text = "Remote gateway: enter pairing credential"
             else { prefs.edit().putString("device_token", token).apply(); testGateway(token, remoteState) }
         }
-        if (prefs.getString("device_token", null)?.length ?: 0 >= 24) {
+        if ((prefs.getString("device_token", null)?.length ?: 0) >= 24) {
             remoteState.text = "Remote gateway: saved credential — tap Connect"
         }
 
