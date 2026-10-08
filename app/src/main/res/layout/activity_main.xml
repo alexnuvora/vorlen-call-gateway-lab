@@ -14,6 +14,12 @@
         android:paddingEnd="24dp"
         android:paddingBottom="40dp">
 
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Vorlen Call Gateway" android:textSize="28sp" android:textStyle="bold"/>
+    <TextView android:id="@+id/connectionSummary" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Disconnected — tap Connect" android:textSize="16sp" android:layout_marginTop="20dp"/>
+    <Button android:id="@+id/connectAll" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Connect" android:layout_marginTop="18dp"/>
+    <Button android:id="@+id/disconnectAll" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Disconnect" android:layout_marginTop="8dp"/>
+    <Button android:id="@+id/toggleAdvanced" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Advanced setup &amp; diagnostics" android:layout_marginTop="20dp"/>
+    <LinearLayout android:id="@+id/advancedPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">
     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Vorlen Gateway Lab" android:textSize="28sp" android:textStyle="bold"/>
     <TextView android:id="@+id/status" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Ready — LAB BUILD" android:layout_marginTop="12dp"/>
     <EditText android:id="@+id/number" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="+44…" android:inputType="phone" android:layout_marginTop="24dp"/>
@@ -57,5 +63,6 @@
         android:singleLine="false"
         android:padding="12dp"/>
 
+    </LinearLayout>
     </LinearLayout>
 </ScrollView>
