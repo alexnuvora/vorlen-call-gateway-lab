@@ -8,9 +8,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
-    <application android:usesCleartextTraffic="false" android:theme="@style/Theme.AICallGateway" android:label="Vorlen Gateway Lab" android:allowBackup="false">
+    <application android:usesCleartextTraffic="false" android:theme="@style/Theme.AICallGateway" android:label="Vorlen Gateway" android:allowBackup="false">
         <service android:name=".GatewayService" android:exported="false" android:foregroundServiceType="specialUse">
-            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-approved Vorlen lab call gateway session."/>
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-approved Vorlen call gateway session."/>
         </service>
 
         <service
