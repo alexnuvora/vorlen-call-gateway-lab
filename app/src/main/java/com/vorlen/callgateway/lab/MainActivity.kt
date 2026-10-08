@@ -25,6 +25,8 @@ import android.telecom.TelecomManager
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
 import android.widget.Button
+import android.widget.LinearLayout
+import android.view.View
 import android.widget.EditText
 import android.widget.TextView
 import java.net.HttpURLConnection
@@ -74,6 +76,98 @@ class MainActivity : AppCompatActivity() {
             dtmfState.text = if (held) "DTMF control: enabled" else "DTMF control: tap Enable and approve Phone app role"
         }
         refreshDtmfRole()
+
+        // Normal operation is a single user-initiated Connect action. Only Android-managed
+        // authorisations (Phone app role and first-time Wireless Debugging pairing) can
+        // require additional user interaction. Existing trust is reused automatically.
+        val connectionSummary = findViewById<TextView>(R.id.connectionSummary)
+        val connectButton = findViewById<Button>(R.id.connectAll)
+        val disconnectButton = findViewById<Button>(R.id.disconnectAll)
+        val advancedPanel = findViewById<LinearLayout>(R.id.advancedPanel)
+        findViewById<Button>(R.id.toggleAdvanced).setOnClickListener {
+            advancedPanel.visibility = if (advancedPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
+        connectButton.setOnClickListener {
+            val token = pairingToken.text.toString().trim().ifEmpty {
+                prefs.getString("device_token", "").orEmpty()
+            }
+            val bridgeHost = laptopIpView.text.toString().trim()
+            val bridgePort = laptopPortView.text.toString().toIntOrNull() ?: 28761
+            when {
+                token.length < 24 -> {
+                    connectionSummary.text = "First-time setup: enter the Vorlen gateway credential under Advanced."
+                    advancedPanel.visibility = View.VISIBLE
+                }
+                bridgeHost.isBlank() || bridgePort !in 1..65535 -> {
+                    connectionSummary.text = "Set a valid laptop address and port under Advanced."
+                    advancedPanel.visibility = View.VISIBLE
+                }
+                else -> {
+                    connectButton.isEnabled = false
+                    connectionSummary.text = "Connecting to Vorlen gateway and restoring digital audio..."
+                    prefs.edit().putString("device_token", token)
+                        .putString("laptop_host", bridgeHost).putInt("laptop_port", bridgePort).apply()
+                    outboundIo.execute {
+                        val outcome = runCatching {
+                            // Verify credentials and server first; do not claim the session
+                            // is ready if authentication, ADB or daemon startup fails.
+                            gatewayGet(token)
+                            runBlocking {
+                                if (!AdbTransport.isConnected) {
+                                    AdbTransport.autoConnect(this@MainActivity, 6000).getOrThrow()
+                                }
+                                ShellCallAudio.bootstrap(this@MainActivity).getOrThrow()
+                            }
+                        }
+                        runOnUiThread {
+                            connectButton.isEnabled = true
+                            outcome.fold(
+                                onSuccess = {
+                                    prefs.edit().putBoolean("laptop_bridge_enabled", true).apply()
+                                    sessionApproved = true
+                                    polling = false
+                                    androidx.core.content.ContextCompat.startForegroundService(
+                                        this@MainActivity,
+                                        Intent(this@MainActivity, GatewayService::class.java)
+                                            .setAction(GatewayService.ACTION_ENABLE_BRIDGE)
+                                    )
+                                    connectionSummary.text =
+                                        "Connected — gateway and audio daemon ready; laptop bridge armed for calls."
+                                    remoteState.text = "Remote gateway: connected"
+                                    sessionState.text = "Calling session: approved"
+                                    refreshLaptopBridgeStateFromConnect(prefs)
+                                    refreshDtmfRole()
+                                    val roles = getSystemService(RoleManager::class.java)
+                                    if (roles.isRoleAvailable(RoleManager.ROLE_DIALER) &&
+                                        !roles.isRoleHeld(RoleManager.ROLE_DIALER)) {
+                                        connectionSummary.text =
+                                            "Gateway connected. Approve the Android Phone app role to enable DTMF."
+                                        startActivity(roles.createRequestRoleIntent(RoleManager.ROLE_DIALER))
+                                    }
+                                },
+                                onFailure = { error ->
+                                    sessionApproved = false
+                                    connectionSummary.text =
+                                        "Connection incomplete: ${error.message ?: "unknown error"}. " +
+                                        "If Wireless Debugging is off or pairing expired, enable it in Android " +
+                                        "Developer Options and use Advanced pairing once."
+                                    advancedPanel.visibility = View.VISIBLE
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        disconnectButton.setOnClickListener {
+            sessionApproved = false
+            polling = false
+            prefs.edit().putBoolean("laptop_bridge_enabled", false).apply()
+            stopService(Intent(this, GatewayService::class.java))
+            connectionSummary.text = "Disconnected — tap Connect"
+            sessionState.text = "Calling session: not approved"
+            refreshLaptopBridgeStateFromConnect(prefs)
+        }
         findViewById<Button>(R.id.enableDtmfControl).setOnClickListener {
             val roles = getSystemService(RoleManager::class.java)
             if (!roles.isRoleAvailable(RoleManager.ROLE_DIALER)) {
@@ -469,6 +563,13 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.hangup).setOnClickListener {
             status.text = endSimCall().message
         }
+    }
+
+    private fun refreshLaptopBridgeStateFromConnect(prefs: android.content.SharedPreferences) {
+        findViewById<TextView>(R.id.laptopBridgeState).text =
+            if (prefs.getBoolean("laptop_bridge_enabled", false))
+                "Laptop bridge: armed; attaches automatically when a call starts"
+            else "Laptop bridge: disabled"
     }
 
     private fun pcm48MonoToWav(pcm: ByteArray): ByteArray {
