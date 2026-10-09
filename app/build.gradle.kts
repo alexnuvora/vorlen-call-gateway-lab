@@ -9,8 +9,30 @@ android {
         applicationId = "com.vorlen.callgateway.lab"
         minSdk = 31
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0-persistent-bridge"
+        versionCode = 21
+        versionName = "0.5.1-gateway-recovery"
+    }
+    // Production/update-compatible signing uses a persistent private keystore,
+    // supplied through GitHub Actions secrets. Never store signing material in Git.
+    val releaseStore = System.getenv("VORLEN_KEYSTORE_PATH")
+    val releaseStorePass = System.getenv("VORLEN_KEYSTORE_PASSWORD")
+    val releaseAlias = System.getenv("VORLEN_KEY_ALIAS")
+    val releaseKeyPass = System.getenv("VORLEN_KEY_PASSWORD")
+    if (listOf(releaseStore, releaseStorePass, releaseAlias, releaseKeyPass).all { !it.isNullOrBlank() }) {
+        signingConfigs {
+            create("vorlenStable") {
+                storeFile = file(releaseStore!!)
+                storePassword = releaseStorePass
+                keyAlias = releaseAlias
+                keyPassword = releaseKeyPass
+            }
+        }
+        buildTypes {
+            getByName("release") {
+                signingConfig = signingConfigs.getByName("vorlenStable")
+                isMinifyEnabled = false
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
