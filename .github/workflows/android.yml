@@ -26,6 +26,36 @@ jobs:
           test -f third_party/JemRec/shellserver/LICENSE-scrcpy
           test -f LICENSE-JEMREC-APACHE-2.0
       - run: gradle assembleDebug
+      - name: Configure persistent signing identity (if configured)
+        id: signing
+        env:
+          VORLEN_KEYSTORE_BASE64: ${{ secrets.VORLEN_KEYSTORE_BASE64 }}
+          VORLEN_KEYSTORE_PASSWORD: ${{ secrets.VORLEN_KEYSTORE_PASSWORD }}
+          VORLEN_KEY_ALIAS: ${{ secrets.VORLEN_KEY_ALIAS }}
+          VORLEN_KEY_PASSWORD: ${{ secrets.VORLEN_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$VORLEN_KEYSTORE_BASE64" && -n "$VORLEN_KEYSTORE_PASSWORD" && -n "$VORLEN_KEY_ALIAS" && -n "$VORLEN_KEY_PASSWORD" ]]; then
+            echo "$VORLEN_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/vorlen-release.jks"
+            chmod 600 "$RUNNER_TEMP/vorlen-release.jks"
+            echo "VORLEN_KEYSTORE_PATH=$RUNNER_TEMP/vorlen-release.jks" >> "$GITHUB_ENV"
+            echo "VORLEN_KEYSTORE_PASSWORD=$VORLEN_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "VORLEN_KEY_ALIAS=$VORLEN_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "VORLEN_KEY_PASSWORD=$VORLEN_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No persistent APK signing secrets: debug APK will not preserve permission grants across reinstallation."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build update-compatible Vorlen APK
+        if: steps.signing.outputs.enabled == 'true'
+        run: gradle assembleRelease
+      - name: Upload stable-signed APK
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vorlen-call-gateway-signed-release
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: vorlen-call-gateway-lab-debug
