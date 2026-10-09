@@ -4,9 +4,9 @@
 
 ## Test shortcut first
 
-On a Windows PC with ChatGPT desktop app or a browser tab visible:
+On your Windows laptop with the global Ctrl+H shortcut configured:
 
-1. Keep your current VoiceMeeter setup working. Open ChatGPT and ensure you are signed in.
+1. Keep your current VoiceMeeter setup working. ChatGPT does not need to be open, but the Ctrl+H global shortcut must be registered and able to launch Voice.
 2. Open PowerShell in this directory and run:
 
    ```powershell
@@ -15,7 +15,7 @@ On a Windows PC with ChatGPT desktop app or a browser tab visible:
 
 3. Verify ChatGPT Voice opens after Ctrl+H. The script **cannot detect whether Voice really started**, so do not dial a client automatically on this result.
 
-If your custom Ctrl+H shortcut depends on a specific app/window, make that window visible first. Other applications may hijack Ctrl+H.
+If your shortcut is not system-wide or its shortcut application is not running, Windows may send Ctrl+H to the focused app instead. Test with ChatGPT closed and no text editor/browser focused. The pilot does not verify that Voice successfully launched.
 
 ## Local inbox smoke test (no Supabase and no dialling)
 
