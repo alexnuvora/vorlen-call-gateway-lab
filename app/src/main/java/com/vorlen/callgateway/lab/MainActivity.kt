@@ -129,15 +129,30 @@ class MainActivity : AppCompatActivity() {
                                     if (firstAttempt.isFailure) {
                                         // Optional ADB-granted recovery. Samsung firmware may reject
                                         // toggling this setting even with WRITE_SECURE_SETTINGS.
-                                        val restored = attemptWirelessDebuggingRecovery()
-                                        if (restored) {
-                                            kotlinx.coroutines.delay(1500)
-                                            AdbTransport.autoConnect(this@MainActivity, 6000).getOrThrow()
-                                        } else {
+                                        val recovery = attemptWirelessDebuggingRecovery()
+                                        if (!recovery.success) {
                                             throw IllegalStateException(
-                                                "Wireless Debugging unavailable. Enable it in Developer options; " +
-                                                "if already paired, retry Connect. Optional setup: grant WRITE_SECURE_SETTINGS " +
-                                                "once using a trusted computer."
+                                                "Wireless Debugging recovery: ${recovery.detail}. " +
+                                                "Open Developer options > Wireless debugging if needed."
+                                            )
+                                        }
+                                        // Samsung sometimes restarts adbd asynchronously. Retry discovery
+                                        // and TLS connection rather than treating one early timeout as failure.
+                                        var retryError = firstAttempt.exceptionOrNull()
+                                        var recovered = false
+                                        repeat(3) {
+                                            if (!recovered) {
+                                                kotlinx.coroutines.delay(1800)
+                                                val attempt = AdbTransport.autoConnect(this@MainActivity, 4500)
+                                                recovered = attempt.isSuccess
+                                                if (!recovered) retryError = attempt.exceptionOrNull()
+                                            }
+                                        }
+                                        if (!recovered) {
+                                            throw IllegalStateException(
+                                                "Wireless Debugging setting is enabled, but ADB connection failed. " +
+                                                "Verify Wi-Fi is on and the Vorlen app is listed under paired devices. " +
+                                                "ADB: ${retryError?.message ?: "unknown connection error"}"
                                             )
                                         }
                                     }
@@ -596,14 +611,38 @@ class MainActivity : AppCompatActivity() {
      * This is not a guarantee: Samsung/Android may restrict adb_wifi_enabled
      * regardless of WRITE_SECURE_SETTINGS, and USB debugging is unaffected.
      */
-    private fun attemptWirelessDebuggingRecovery(): Boolean {
-        if (androidx.core.content.ContextCompat.checkSelfPermission(
-                this, Manifest.permission.WRITE_SECURE_SETTINGS
-            ) != PackageManager.PERMISSION_GRANTED) return false
-        return runCatching {
-            Settings.Global.putInt(contentResolver, "adb_wifi_enabled", 1) &&
-                Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0) == 1
-        }.getOrDefault(false)
+    private data class RecoveryResult(val success: Boolean, val detail: String)
+
+    /** Best-effort secure-settings recovery; only triggered by an explicit Connect tap. */
+    private fun attemptWirelessDebuggingRecovery(): RecoveryResult {
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+            this, Manifest.permission.WRITE_SECURE_SETTINGS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            return RecoveryResult(false,
+                "WRITE_SECURE_SETTINGS not granted to this installed APK")
+        }
+        return try {
+            val before = Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0)
+            if (before == 1) {
+                RecoveryResult(true, "Android reports Wireless Debugging already enabled")
+            } else {
+                val written = Settings.Global.putInt(contentResolver, "adb_wifi_enabled", 1)
+                val after = Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0)
+                if (written && after == 1) {
+                    RecoveryResult(true, "Wireless Debugging setting changed to enabled")
+                } else {
+                    RecoveryResult(false,
+                        "Samsung rejected the setting change (write=$written, state=$after)")
+                }
+            }
+        } catch (e: SecurityException) {
+            RecoveryResult(false,
+                "Samsung denied setting access: ${e.message ?: "security restriction"}")
+        } catch (e: Exception) {
+            RecoveryResult(false,
+                "Setting change failed: ${e.javaClass.simpleName}: ${e.message ?: "unknown"}")
+        }
     }
 
     private fun refreshLaptopBridgeStateFromConnect(prefs: android.content.SharedPreferences) {
