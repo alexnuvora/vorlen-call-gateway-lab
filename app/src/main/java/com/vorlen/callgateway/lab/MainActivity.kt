@@ -15,6 +15,7 @@ import java.nio.ByteBuffer
 import java.util.Locale
 import java.io.File
 import android.os.Bundle
+import android.provider.Settings
 import android.content.Intent
 import android.app.PendingIntent
 import android.app.NotificationChannel
@@ -112,7 +113,22 @@ class MainActivity : AppCompatActivity() {
                             gatewayGet(token)
                             runBlocking {
                                 if (!AdbTransport.isConnected) {
-                                    AdbTransport.autoConnect(this@MainActivity, 6000).getOrThrow()
+                                    val firstAttempt = AdbTransport.autoConnect(this@MainActivity, 3500)
+                                    if (firstAttempt.isFailure) {
+                                        // Optional ADB-granted recovery. Samsung firmware may reject
+                                        // toggling this setting even with WRITE_SECURE_SETTINGS.
+                                        val restored = attemptWirelessDebuggingRecovery()
+                                        if (restored) {
+                                            kotlinx.coroutines.delay(1500)
+                                            AdbTransport.autoConnect(this@MainActivity, 6000).getOrThrow()
+                                        } else {
+                                            throw IllegalStateException(
+                                                "Wireless Debugging unavailable. Enable it in Developer options; " +
+                                                "if already paired, retry Connect. Optional setup: grant WRITE_SECURE_SETTINGS " +
+                                                "once using a trusted computer."
+                                            )
+                                        }
+                                    }
                                 }
                                 ShellCallAudio.bootstrap(this@MainActivity).getOrThrow()
                             }
@@ -561,6 +577,21 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.hangup).setOnClickListener {
             status.text = endSimCall().message
         }
+    }
+
+    /**
+     * Best-effort recovery only after the user taps Connect.
+     * This is not a guarantee: Samsung/Android may restrict adb_wifi_enabled
+     * regardless of WRITE_SECURE_SETTINGS, and USB debugging is unaffected.
+     */
+    private fun attemptWirelessDebuggingRecovery(): Boolean {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                this, Manifest.permission.WRITE_SECURE_SETTINGS
+            ) != PackageManager.PERMISSION_GRANTED) return false
+        return runCatching {
+            Settings.Global.putInt(contentResolver, "adb_wifi_enabled", 1) &&
+                Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0) == 1
+        }.getOrDefault(false)
     }
 
     private fun refreshLaptopBridgeStateFromConnect(prefs: android.content.SharedPreferences) {
