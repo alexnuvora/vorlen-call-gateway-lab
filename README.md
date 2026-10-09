@@ -5,6 +5,21 @@ Experimental Android call-audio lab derived from the working Vorlen gateway. Pro
 This APK uses a separate Android application ID so it can coexist with the production gateway on the same device.
 
 
+## Why Wireless Debugging recovery permission disappeared after APK updates
+
+The old GitHub Actions builds used **ephemeral debug signing keys** from disposable CI runners. Android cannot install a differently signed APK over the previous app, forcing a reinstall that resets `WRITE_SECURE_SETTINGS`, gateway credentials and ADB pairing identity. The new workflow supports a persistent **signed release APK**; configure four repository Actions secrets:
+
+- `VORLEN_KEYSTORE_BASE64` — base64-encoded private release keystore (keep secret, never commit).
+- `VORLEN_KEYSTORE_PASSWORD` — keystore password.
+- `VORLEN_KEY_ALIAS` — key alias.
+- `VORLEN_KEY_PASSWORD` — signing key password.
+
+Generate a private keystore on your trusted PC with `keytool` and store a secure backup. Add those secrets through GitHub Settings → Secrets and variables → Actions. On each push, download the `vorlen-call-gateway-signed-release` artifact **instead of** the ephemeral debug build. Every signed release must use the same keystore and a higher `versionCode` for Android in-place upgrades.
+
+Because the former APK is signed differently, perform **one final migration** from the debug build to the first release build. Record the gateway credential and laptop settings safely beforehand, uninstall the old debug app, install the first stable-signed release, pair Vorlen to wireless ADB once and use Termux to grant `WRITE_SECURE_SETTINGS` once. Future upgrades from the stable-signed releases should preserve the grant and pairing data.
+
+A stable signing identity **does not bypass Android's permission model**, and Wireless Debugging may still require the phone to be on Wi-Fi. This project deliberately does not embed a private signing key or grant permissions silently.
+
 ## Optional one-time Wireless Debugging recovery (Samsung S24 FE)
 
 The **Connect** button first reuses the saved wireless ADB pairing. If ADB is unavailable, the app can attempt a best-effort recovery of the Android `adb_wifi_enabled` setting **only if** the optional `WRITE_SECURE_SETTINGS` permission has been granted through trusted ADB. No root is required for the attempt; Samsung firmware may still block it.
