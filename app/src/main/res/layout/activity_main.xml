@@ -27,6 +27,7 @@
     <Button android:id="@+id/call" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Make SIM Call" android:layout_marginTop="12dp"/>
     <Button android:id="@+id/hangup" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="End Call" android:layout_marginTop="8dp"/>
     <EditText android:id="@+id/pairingToken" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Pairing credential" android:inputType="textPassword" android:layout_marginTop="16dp" android:textColor="#E2E8F0" android:textColorHint="#94A3B8"/>
+    <Button android:id="@+id/saveGatewayCredential" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Save gateway credential" android:layout_marginTop="8dp"/>
     <Button android:id="@+id/pairGateway" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Pair / Test Gateway" android:layout_marginTop="8dp" android:visibility="gone"/>
     <Button android:id="@+id/approveSession" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Approve Calling Session" android:layout_marginTop="8dp" android:visibility="gone"/>
     <TextView android:id="@+id/sessionState" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Calling session: not approved" android:layout_marginTop="8dp" android:textColor="#E2E8F0"/>
