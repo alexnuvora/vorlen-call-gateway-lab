@@ -142,6 +142,7 @@ class MainActivity : AppCompatActivity() {
                                         var recovered = false
                                         repeat(3) {
                                             if (!recovered) {
+                                                AdbTransport.close()
                                                 kotlinx.coroutines.delay(1800)
                                                 val attempt = AdbTransport.autoConnect(this@MainActivity, 4500)
                                                 recovered = attempt.isSuccess
@@ -168,8 +169,12 @@ class MainActivity : AppCompatActivity() {
                                         daemonReady = boot.isSuccess || ShellCallAudio.ping()
                                         bootstrapError = boot.exceptionOrNull()
                                         if (!daemonReady) {
-                                            kotlinx.coroutines.delay(1700)
-                                            AdbTransport.autoConnect(this@MainActivity, 5000)
+                                            // adbd may restart while our persistent shell socket
+                                            // still appears connected. Drop the stale transport,
+                                            // but preserve the saved ADB identity/pairing.
+                                            AdbTransport.close()
+                                            kotlinx.coroutines.delay(1800)
+                                            AdbTransport.autoConnect(this@MainActivity, 6000)
                                         }
                                     }
                                 }
