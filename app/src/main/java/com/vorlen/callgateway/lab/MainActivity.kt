@@ -63,6 +63,18 @@ class MainActivity : AppCompatActivity() {
         val sessionState = findViewById<TextView>(R.id.sessionState)
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
         pairingToken.setText(prefs.getString("device_token", ""))
+        findViewById<Button>(R.id.saveGatewayCredential).setOnClickListener {
+            val token = pairingToken.text.toString().trim()
+            if (token.length < 24) {
+                findViewById<TextView>(R.id.connectionSummary).text =
+                    "Enter your Vorlen gateway credential (at least 24 characters), then tap Save."
+            } else {
+                // Save locally. Connect separately verifies this credential with the server.
+                prefs.edit().putString("device_token", token).apply()
+                findViewById<TextView>(R.id.connectionSummary).text =
+                    "Gateway credential saved on this phone. Tap Connect to verify and start."
+            }
+        }
         val laptopIpView = findViewById<EditText>(R.id.laptopIp)
         val laptopPortView = findViewById<EditText>(R.id.laptopPort)
         laptopIpView.setText(prefs.getString("laptop_host", "192.168.1.4"))
@@ -96,7 +108,7 @@ class MainActivity : AppCompatActivity() {
             val bridgePort = laptopPortView.text.toString().toIntOrNull() ?: 28761
             when {
                 token.length < 24 -> {
-                    connectionSummary.text = "Setup needed: gateway credential missing. Tap Advanced setup & diagnostics to enter it."
+                    connectionSummary.text = "Setup needed: gateway credential missing. Open Connection settings to enter and save it."
                 }
                 bridgeHost.isBlank() || bridgePort !in 1..65535 -> {
                     connectionSummary.text = "Setup needed: laptop address or port is invalid. Open Advanced setup to correct it."
