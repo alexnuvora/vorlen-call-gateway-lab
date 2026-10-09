@@ -54,7 +54,7 @@ if (-not $Watch) {
  exit
 }
 if (-not (Test-Path -LiteralPath $Store)) { throw 'Run -Setup first.' }
-$secure=Get-Content -LiteralPath $Store -Raw | ConvertTo-SecureString
+$secure=(Get-Content -LiteralPath $Store -Raw).Trim() | ConvertTo-SecureString
 $bstr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 try { $secret=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
 finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
