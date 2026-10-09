@@ -2,28 +2,33 @@
 # Start: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\VorlenVoiceStation.ps1
 # This process does NOT place calls or alter the Android gateway.
 param([switch]$SendShortcut, [switch]$Watch, [string]$InboxPath = "$env:LOCALAPPDATA\Vorlen\voice-station-inbox.json")
-Add-Type -AssemblyName System.Windows.Forms
+# Send the global hotkey directly, regardless of whether ChatGPT is already open.
+# keybd_event is supported on Windows PowerShell 5.1 and invokes registered hotkeys.
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public static class VorlenWin {
- [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
- [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+public static class VorlenHotkey {
+ [DllImport("user32.dll", SetLastError = true)]
+ public static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
 }
 "@
 function Activate-Voice {
-  $candidate = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.MainWindowTitle -match 'ChatGPT') } | Select-Object -First 1
-  if (-not $candidate) {
-    Write-Warning 'No open ChatGPT window found. Open ChatGPT yourself and retry. No calls have been placed.'
+  $keyUp = [uint32]0x0002
+  try {
+    [VorlenHotkey]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero) # Ctrl down
+    Start-Sleep -Milliseconds 80
+    [VorlenHotkey]::keybd_event(0x48, 0, 0, [UIntPtr]::Zero) # H down
+    Start-Sleep -Milliseconds 80
+    [VorlenHotkey]::keybd_event(0x48, 0, $keyUp, [UIntPtr]::Zero) # H up
+    [VorlenHotkey]::keybd_event(0x11, 0, $keyUp, [UIntPtr]::Zero) # Ctrl up
+    Write-Host 'Sent global Ctrl+H shortcut. Check that ChatGPT Voice opens. No call was placed.'
+    return $true
+  } catch {
+    # Never leave Ctrl held when something fails.
+    [VorlenHotkey]::keybd_event(0x11, 0, $keyUp, [UIntPtr]::Zero)
+    Write-Warning $_.Exception.Message
     return $false
   }
-  [VorlenWin]::ShowWindow($candidate.MainWindowHandle, 9) | Out-Null
-  [VorlenWin]::SetForegroundWindow($candidate.MainWindowHandle) | Out-Null
-  Start-Sleep -Milliseconds 700
-  if ([System.Diagnostics.Process]::GetCurrentProcess().Id -eq $candidate.Id) { throw 'Invalid foreground target' }
-  [System.Windows.Forms.SendKeys]::SendWait('^h')
-  Write-Host 'Sent Ctrl+H to ChatGPT. Confirm Voice is active manually. No call has been placed.'
-  return $true
 }
 if ($SendShortcut) { [void](Activate-Voice); exit }
 if (-not $Watch) {
