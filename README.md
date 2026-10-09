@@ -4,6 +4,26 @@ Experimental Android call-audio lab derived from the working Vorlen gateway. Pro
 
 This APK uses a separate Android application ID so it can coexist with the production gateway on the same device.
 
+
+## Optional one-time Wireless Debugging recovery (Samsung S24 FE)
+
+The **Connect** button first reuses the saved wireless ADB pairing. If ADB is unavailable, the app can attempt a best-effort recovery of the Android `adb_wifi_enabled` setting **only if** the optional `WRITE_SECURE_SETTINGS` permission has been granted through trusted ADB. No root is required for the attempt; Samsung firmware may still block it.
+
+With the phone connected to a trusted computer and ADB authorised, run once:
+
+```powershell
+adb shell pm grant com.vorlen.callgateway.lab android.permission.WRITE_SECURE_SETTINGS
+adb shell dumpsys package com.vorlen.callgateway.lab | findstr WRITE_SECURE_SETTINGS
+```
+
+The permission grant is persistent unless app data/package identity or permissions change. It is **not** a guarantee Wireless Debugging survives a reboot. The first pairing still requires the Android-generated pairing port and six-digit code, entered through the app's Connection settings. Android may also require Wi-Fi and manual enabling in Developer options; the app must not claim a connected state if ADB, audio daemon or backend verification fails.
+
+For security, use only your own trusted computer, do not permanently expose ADB over TCP on your network, and disable Wireless Debugging when the gateway is not in use. To revoke the optional grant:
+
+```powershell
+adb shell pm revoke com.vorlen.callgateway.lab android.permission.WRITE_SECURE_SETTINGS
+```
+
 ## Audio lab
 
 Experimental digital cellular-call audio work is isolated here; the production gateway remains unchanged.
