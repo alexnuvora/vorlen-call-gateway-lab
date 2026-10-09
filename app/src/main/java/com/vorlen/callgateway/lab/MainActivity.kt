@@ -157,7 +157,28 @@ class MainActivity : AppCompatActivity() {
                                         }
                                     }
                                 }
-                                ShellCallAudio.bootstrap(this@MainActivity).getOrThrow()
+                                // The first connection after re-enabling Wireless Debugging may
+                                // race an adbd restart. ADB can report connected while its
+                                // previous shell stream has already closed.
+                                var daemonReady = ShellCallAudio.ping()
+                                var bootstrapError: Throwable? = null
+                                repeat(3) {
+                                    if (!daemonReady) {
+                                        val boot = ShellCallAudio.bootstrap(this@MainActivity)
+                                        daemonReady = boot.isSuccess || ShellCallAudio.ping()
+                                        bootstrapError = boot.exceptionOrNull()
+                                        if (!daemonReady) {
+                                            kotlinx.coroutines.delay(1700)
+                                            AdbTransport.autoConnect(this@MainActivity, 5000)
+                                        }
+                                    }
+                                }
+                                if (!daemonReady) {
+                                    throw IllegalStateException(
+                                        "Audio daemon could not start after Wireless Debugging restarted: " +
+                                        (bootstrapError?.message ?: "unknown error")
+                                    )
+                                }
                             }
                         }
                         runOnUiThread {
