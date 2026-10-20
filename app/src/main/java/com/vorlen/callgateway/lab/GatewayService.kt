@@ -367,7 +367,8 @@ class GatewayService : Service() {
                             val staleId=activeRequestId
                             bridgePending=false
                             bridgeEverActive=false
-                            ShellCallAudio.stopLaptopNetworkBridge()
+                            // Do not block the remote hang-up acknowledgement on socket/audio teardown.
+                            // The bridge supervisor exits when activeRequestId changes.
                             activeRequestId=null
                             sawOffHook=false
                             requestStartedAtMs=0L
@@ -376,6 +377,9 @@ class GatewayService : Service() {
                                 completeRequest(staleId)
                             }
                             gatewayAck(token,id,"completed","command",null)
+                            // Tear down laptop transport asynchronously AFTER the hang-up ACK.
+                            // Audio recovery must never hold up cellular call control.
+                            daemonIo.execute { ShellCallAudio.stopLaptopNetworkBridge() }
                         }else{
                             gatewayAck(token,id,"failed","command",result.message)
                         }
@@ -441,7 +445,7 @@ class GatewayService : Service() {
     }
 
     private fun gatewayGet(token:String):JSONObject{
-        val c=URL(GATEWAY_URL).openConnection() as HttpURLConnection;c.requestMethod="GET";c.connectTimeout=10000;c.readTimeout=10000
+        val c=URL(GATEWAY_URL).openConnection() as HttpURLConnection;c.requestMethod="GET";c.connectTimeout=2500;c.readTimeout=2500
         c.setRequestProperty("x-device-code",DEVICE_CODE);c.setRequestProperty("x-device-token",token)
         val code=c.responseCode;val body=(if(code in 200..299)c.inputStream else c.errorStream).bufferedReader().use{it.readText()};c.disconnect()
         if(code !in 200..299)throw IllegalStateException("HTTP $code");return JSONObject(body)
@@ -460,7 +464,7 @@ class GatewayService : Service() {
         if(!outboundIo.isShutdown)outboundIo.execute{try{gatewayAck(token,id,"failed","request",error)}catch(_:Exception){}}
     }
     private fun post(token:String,json:JSONObject){
-        val c=URL(GATEWAY_URL).openConnection() as HttpURLConnection;c.requestMethod="POST";c.doOutput=true;c.connectTimeout=10000;c.readTimeout=10000
+        val c=URL(GATEWAY_URL).openConnection() as HttpURLConnection;c.requestMethod="POST";c.doOutput=true;c.connectTimeout=2500;c.readTimeout=2500
         c.setRequestProperty("Content-Type","application/json");c.setRequestProperty("x-device-code",DEVICE_CODE);c.setRequestProperty("x-device-token",token)
         c.outputStream.use{it.write(json.toString().toByteArray())};val code=c.responseCode
         if(code in 200..299)c.inputStream.close() else c.errorStream?.close();c.disconnect();if(code !in 200..299)throw IllegalStateException("POST HTTP $code")
