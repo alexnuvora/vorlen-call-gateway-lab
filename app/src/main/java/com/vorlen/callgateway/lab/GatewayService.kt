@@ -22,6 +22,7 @@ class GatewayService : Service() {
     private val pollIo=Executors.newSingleThreadExecutor()
     private val outboundIo=Executors.newSingleThreadExecutor()
     private val bridgeIo=Executors.newSingleThreadExecutor()
+    private val cleanupIo=Executors.newSingleThreadExecutor()
     private val daemonIo=Executors.newSingleThreadExecutor()
     private val daemonRecoveryLock=Any()
     @Volatile private var running=false
@@ -379,7 +380,7 @@ class GatewayService : Service() {
                             gatewayAck(token,id,"completed","command",null)
                             // Tear down laptop transport asynchronously AFTER the hang-up ACK.
                             // Audio recovery must never hold up cellular call control.
-                            daemonIo.execute { ShellCallAudio.stopLaptopNetworkBridge() }
+                            cleanupIo.execute { ShellCallAudio.stopLaptopNetworkBridge() }
                         }else{
                             gatewayAck(token,id,"failed","command",result.message)
                         }
