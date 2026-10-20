@@ -73,7 +73,8 @@ class GatewayService : Service() {
             bridgeEverActive=false
             // The per-call telephony stream ends here, but the persistent bridge
             // preference remains enabled. The next call re-attaches automatically.
-            ShellCallAudio.stopLaptopNetworkBridge()
+            // Phone-state callbacks must not wait for laptop network/audio teardown.
+            cleanupIo.execute { ShellCallAudio.stopLaptopNetworkBridge() }
         }
     }
 
