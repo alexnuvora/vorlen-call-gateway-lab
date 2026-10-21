@@ -255,7 +255,9 @@ object ShellCallAudio {
             laptopOut.write(byteArrayOf('V'.code.toByte(),'O'.code.toByte(),'R'.code.toByte(),'1'.code.toByte())); laptopOut.flush()
             val ack = ByteArray(4); laptopIn.readFully(ack)
             check(String(ack, Charsets.US_ASCII) == "VOR1") { "Laptop handshake failed" }
-            laptop.soTimeout = 0
+            // PCM packets are continuous. A silent/stalled laptop must trigger
+            // bridge teardown and retry rather than block readInt() forever.
+            laptop.soTimeout = 8_000
             onReady?.invoke("LAPTOP_CONNECTED VOR1")
 
             val running = java.util.concurrent.atomic.AtomicBoolean(true)
