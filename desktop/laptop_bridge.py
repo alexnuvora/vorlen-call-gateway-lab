@@ -245,30 +245,72 @@ def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None):
     threading.Thread(target=rx, daemon=True).start()
     threading.Thread(target=reporter, daemon=True).start()
 
+    # Capture can block indefinitely inside PortAudio even when TCP remains
+    # connected. Keep it off the supervisor thread so a stalled sound device
+    # cannot prevent the laptop from accepting the phone's next connection.
+    tx_progress = {"at": time.monotonic()}
+    tx_error = []
+
+    def tx():
+        try:
+            while not stop.is_set():
+                data, overflow = inp.read(FRAMES)
+                if stop.is_set():
+                    return
+                payload = input_to_mono_pcm16(bytes(data), input_channels)
+                if len(payload) != FRAME_BYTES:
+                    raise RuntimeError(f"downmix frame size mismatch: got {len(payload)} bytes, expected {FRAME_BYTES}")
+                send_frame(conn, payload, lock)
+                with stats_lock:
+                    stats["tx_frames"] += 1
+                    stats["tx_bytes"] += len(payload)
+                    stats["tx_db"] = rms_dbfs(payload)
+                    if overflow:
+                        stats["tx_overflows"] += 1
+                    tx_progress["at"] = time.monotonic()
+        except Exception as e:
+            tx_error.append(e)
+        finally:
+            stop.set()
+
+    sender = threading.Thread(target=tx, name="vorlen-audio-tx", daemon=True)
+    sender.start()
     try:
-        while not stop.is_set():
-            data, overflow = inp.read(FRAMES)
-            payload = input_to_mono_pcm16(bytes(data), input_channels)
-            if len(payload) != FRAME_BYTES:
-                raise RuntimeError(f"downmix frame size mismatch: got {len(payload)} bytes, expected {FRAME_BYTES}")
+        while not stop.wait(0.25):
             with stats_lock:
-                stats["tx_frames"] += 1
-                stats["tx_bytes"] += len(payload)
-                stats["tx_db"] = rms_dbfs(payload)
-                if overflow:
-                    stats["tx_overflows"] += 1
-            send_frame(conn, payload, lock)
+                stalled_for = time.monotonic() - tx_progress["at"]
+            if stalled_for > 3.0:
+                raise TimeoutError(
+                    f"audio capture/send stalled for {stalled_for:.1f}s; "
+                    "resetting bridge transport without ending cellular call"
+                )
+        if tx_error and not is_expected_disconnect(tx_error[0]):
+            raise tx_error[0]
     finally:
         stop.set()
+        # Wake socket reads/writes promptly; closing this socket does NOT
+        # hang up the Android cellular call.
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        conn.close()
+        # Abort (rather than drain) PortAudio on a frozen device; bounded
+        # cleanup prevents the bridge supervisor from hanging indefinitely.
         for stream in (inp, out, monitor):
             if stream is None:
                 continue
             try:
-                stream.stop()
-            except Exception:
-                pass
-            stream.close()
-        conn.close()
+                stream.abort(ignore_errors=True)
+            except Exception as e:
+                print("Audio stream abort warning:", repr(e))
+            try:
+                stream.close(ignore_errors=True)
+            except Exception as e:
+                print("Audio stream close warning:", repr(e))
+        sender.join(timeout=0.5)
+        if sender.is_alive():
+            print("WARNING: capture thread stuck after bridge reset; inspect audio device")
 
 
 def main():
