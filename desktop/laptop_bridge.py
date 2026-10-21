@@ -155,6 +155,10 @@ def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None):
     # held waiting for a previous ACK; latency matters more than throughput here.
     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    # Continuous PCM traffic is expected every 10 ms. If either direction stops
+    # for 8 seconds, fail this bridge session so the phone can reconnect.
+    # This prevents a half-open sendall()/recv() from trapping the listener.
+    conn.settimeout(8.0)
     # Best-effort Windows keepalive tuning. This helps detect dead Wi-Fi/NAT
     # sessions without killing healthy long calls. Unsupported platforms simply
     # keep the default SO_KEEPALIVE behaviour.
