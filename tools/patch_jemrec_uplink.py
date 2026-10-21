@@ -26,6 +26,8 @@ handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
             OutputStream os = client.getOutputStream();
             AudioRecord rx = null;
             AudioTrack tx = null;
+            final java.util.concurrent.atomic.AtomicBoolean running=new java.util.concurrent.atomic.AtomicBoolean(true);
+            Thread down=null;
             try {
                 Context context = FakeContext.get();
                 AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
@@ -62,19 +64,18 @@ handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
                         " playbackRate="+tx.getPlaybackRate()+" bufferFrames="+tx.getBufferSizeInFrames()+"\n")
                         .getBytes(StandardCharsets.UTF_8)); os.flush();
                 final AudioRecord frx=rx; final AudioTrack ftx=tx;
-                final java.util.concurrent.atomic.AtomicBoolean running=new java.util.concurrent.atomic.AtomicBoolean(true);
                 final java.util.concurrent.atomic.AtomicReference<Throwable> pumpError=new java.util.concurrent.atomic.AtomicReference<Throwable>();
                 rx.startRecording(); tx.play();
 
-                Thread down=new Thread(new Runnable(){ public void run(){
+                down=new Thread(new Runnable(){ public void run(){
                     byte[] b=new byte[960];
                     try {
                         while(running.get()){
                             int n=frx.read(b,0,b.length,AudioRecord.READ_BLOCKING);
-                            if(n<=0) continue;
+                            if(n<=0) throw new IllegalStateException("Telephony RX read "+n);
                             synchronized(os){ os.write(new byte[]{(byte)(n>>>24),(byte)(n>>>16),(byte)(n>>>8),(byte)n}); os.write(b,0,n); os.flush(); }
                         }
-                    } catch(Throwable t){ pumpError.set(t); running.set(false); }
+                    } catch(Throwable t){ pumpError.set(t); running.set(false); try{client.close();}catch(Throwable ignored){} }
                 }}, "vorlen-call-rx");
                 down.start();
 
@@ -94,13 +95,17 @@ handler=r'''        if (command == COMMAND_LAPTOP_BRIDGE) {
                     }
                 }
                 running.set(false);
-                try{rx.stop();}catch(Throwable ignored){}
-                try{down.join(1500);}catch(Throwable ignored){}
                 Throwable pe=pumpError.get(); if(pe!=null && !(pe instanceof java.net.SocketException)) throw pe;
-                tx.stop();
             } catch(Throwable t) {
-                try { os.write(("FAILED "+t.getClass().getName()+": "+String.valueOf(t.getMessage())+"\n").getBytes(StandardCharsets.UTF_8)); os.flush(); } catch(Throwable ignored){}
+                System.err.println("Vorlen duplex ended: "+t);
             } finally {
+                running.set(false);
+                // Close transport before audio cleanup; never write a diagnostic
+                // into the binary PCM stream or wait on a stalled peer here.
+                try{client.close();}catch(Throwable ignored){}
+                if(rx!=null)try{rx.stop();}catch(Throwable ignored){}
+                if(tx!=null)try{tx.pause(); tx.flush();}catch(Throwable ignored){}
+                if(down!=null)try{down.join(1500);}catch(Throwable ignored){}
                 if(rx!=null)try{rx.release();}catch(Throwable ignored){}
                 if(tx!=null)try{tx.release();}catch(Throwable ignored){}
             }

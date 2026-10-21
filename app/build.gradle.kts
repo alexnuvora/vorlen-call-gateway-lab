@@ -9,8 +9,8 @@ android {
         applicationId = "com.vorlen.callgateway.lab"
         minSdk = 31
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.5.1-gateway-recovery"
+        versionCode = 22
+        versionName = "0.5.2-audio-watchdog"
     }
     // Production/update-compatible signing uses a persistent private keystore,
     // supplied through GitHub Actions secrets. Never store signing material in Git.
