@@ -26,3 +26,40 @@ The Android gateway side connects to the laptop's LAN IPv4 address and port
 28761. Caller audio is sent phone -> laptop; laptop ChatGPT audio is sent
 laptop -> phone. The cellular side remains handled by the existing shell audio
 engine.
+
+## Recovery update (0.5.2)
+
+Update **both** this laptop script and the Android lab APK (version code 22).
+Keep the existing virtual-cable selections and use the stable-signed APK with
+the same signing identity as your installed app.
+
+The listener now owns a separate spawned audio process per phone connection.
+If either direction stops completing PCM transfers for 12 seconds (including
+a frozen audio driver or stream cleanup), it closes the connection and terminates
+that worker. The phone reconnects within the existing active call. Android also
+watches both pumps and closes stalled sockets after 10 seconds; its 8-second
+read timeout remains in place. Recovery can therefore cause a noticeable audio
+gap; this is not a promise of uninterrupted audio during Wi-Fi/device failure.
+
+Silence is valid PCM and does not trigger recovery. The optional local monitor
+still belongs to the session: if its driver hangs, the session will be restarted.
+The bridge does not detect a muted or incorrectly selected ChatGPT microphone,
+or control ChatGPT Voice itself.
+
+Run regression tests without audio hardware:
+`python -m unittest discover -s desktop/tests -v`
+
+### Hardware acceptance test
+
+1. Start the updated script with the same two virtual cables as before.
+2. Place an authorised test call and check speech in both directions.
+3. Briefly disconnect laptop Wi-Fi, then reconnect. Verify audio returns on the
+   **same** cellular call and a reconnect event is recorded.
+4. Restart the laptop bridge during the call and verify the same recovery.
+5. Run a 20-minute conversation, including periods of silence, then hang up and
+   place a second test call. Confirm no duplicate/old audio and no stuck worker.
+6. If audio is lost, keep the timestamp and bridge console output. Nonzero RX
+   traffic with audible levels but no ChatGPT response points to routing or the
+   ChatGPT session, which is outside the bridge's transport watchdog.
+
+Do not replace files or restart the bridge during a client call.

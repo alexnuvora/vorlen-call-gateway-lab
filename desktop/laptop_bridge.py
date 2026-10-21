@@ -21,9 +21,9 @@ Audio routing:
   Two separate virtual cables are strongly recommended to avoid feedback.
 """
 import argparse
-import audioop
 from array import array
 import math
+import multiprocessing
 import socket
 import struct
 import threading
@@ -31,8 +31,8 @@ import time
 
 try:
     import sounddevice as sd
-except ImportError:
-    raise SystemExit("Install dependency first: python -m pip install sounddevice")
+except (ImportError, OSError):
+    sd = None
 
 RATE = 48000
 CHANNELS = 1
@@ -144,13 +144,15 @@ def input_to_mono_pcm16(pcm, channels):
 def rms_dbfs(pcm):
     if not pcm:
         return -120.0
-    rms = audioop.rms(pcm, SAMPLE_BYTES)
+    samples = array("h")
+    samples.frombytes(pcm)
+    rms = math.sqrt(sum(int(x) * int(x) for x in samples) / len(samples))
     if rms <= 0:
         return -120.0
     return 20.0 * math.log10(rms / 32768.0)
 
 
-def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None):
+def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None, progress=None):
     # Voice PCM is sent in 10 ms packets. Disable Nagle so a short packet is never
     # held waiting for a previous ACK; latency matters more than throughput here.
     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -213,6 +215,8 @@ def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None):
                 if len(payload) % SAMPLE_BYTES:
                     raise ConnectionError(f"unaligned caller PCM frame: {len(payload)} bytes")
                 out.write(payload)
+                if progress is not None:
+                    progress[1] = time.monotonic()
                 if monitor is not None:
                     monitor.write(payload)
                 with stats_lock:
@@ -226,6 +230,10 @@ def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None):
                 print("Phone -> laptop audio failed:", repr(e))
         finally:
             stop.set()
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def reporter():
         last_tx = last_rx = 0
@@ -258,8 +266,14 @@ def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None):
                 if overflow:
                     stats["tx_overflows"] += 1
             send_frame(conn, payload, lock)
+            if progress is not None:
+                progress[0] = time.monotonic()
     finally:
         stop.set()
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         for stream in (inp, out, monitor):
             if stream is None:
                 continue
@@ -271,6 +285,53 @@ def handle(conn, input_dev, output_dev, input_channels, monitor_dev=None):
         conn.close()
 
 
+
+def session_worker(conn, input_dev, output_dev, input_channels, monitor_dev, progress):
+    """Own all PortAudio handles in a disposable process, including setup."""
+    try:
+        handle(conn, input_dev, output_dev, input_channels, monitor_dev, progress)
+    except Exception as exc:
+        print("Bridge session ended:", repr(exc), flush=True)
+    finally:
+        conn.close()
+
+
+def supervise_session(conn, input_dev, output_dev, input_channels, monitor_dev=None,
+                      stall_seconds=12.0, worker=session_worker):
+    # A thread watchdog cannot recover a native PortAudio read/write/close hang.
+    # Spawn also avoids inheriting initialized PortAudio state on Unix.
+    ctx = multiprocessing.get_context("spawn")
+    progress = ctx.Array("d", [time.monotonic(), time.monotonic()], lock=False)
+    process = ctx.Process(target=worker, args=(
+        conn, input_dev, output_dev, input_channels, monitor_dev, progress))
+    try:
+        process.start()
+        while process.is_alive():
+            process.join(timeout=0.25)
+            now = time.monotonic()
+            if process.is_alive() and any(now - stamp > stall_seconds for stamp in progress):
+                print("AUDIO STALLED: restarting session; waiting for phone reconnect",
+                      flush=True)
+                break
+    finally:
+        # Never send a final frame on a stalled transport. Close first.
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        conn.close()
+        if process.pid is not None:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=2)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=2)
+            if process.is_alive():
+                raise RuntimeError("Unable to stop audio worker; refusing overlapping sessions")
+            process.close()
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--bind", default="0.0.0.0")
@@ -280,6 +341,9 @@ def main():
     p.add_argument("--monitor-output", help="Optional physical speaker/headset output to monitor caller audio locally")
     p.add_argument("--list-devices", action="store_true")
     a = p.parse_args()
+
+    if sd is None:
+        p.error("Install audio support: python -m pip install sounddevice (and PortAudio on Linux)")
 
     if a.list_devices:
         print(sd.query_devices())
@@ -310,7 +374,7 @@ def main():
                         print("Listener accept failed; rebuilding listener:", repr(e))
                         break
                     try:
-                        handle(c, input_dev, output_dev, input_channels, monitor_dev)
+                        supervise_session(c, input_dev, output_dev, input_channels, monitor_dev)
                     except Exception as e:
                         if is_expected_disconnect(e):
                             print("Phone bridge closed; listening for next connection")
@@ -330,4 +394,5 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()

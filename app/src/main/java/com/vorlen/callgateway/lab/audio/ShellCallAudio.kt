@@ -218,6 +218,8 @@ object ShellCallAudio {
     }
 
     suspend fun runLaptopNetworkBridge(context: Context, host: String, port: Int, onReady: ((String) -> Unit)? = null): TestResult = withContext(Dispatchers.IO) {
+        var ownedShell: Socket? = null
+        var ownedLaptop: Socket? = null
         runCatching {
             require(host.isNotBlank()) { "Laptop IP is required" }
             require(port in 1..65535) { "Invalid laptop port" }
@@ -230,17 +232,19 @@ object ShellCallAudio {
             } catch (t: Throwable) {
                 throw java.io.IOException("shell_open: " + (t.message ?: t.javaClass.simpleName), t)
             }
+            ownedShell = shell
             activeShellSocket = shell
             shell.soTimeout = 10_000
             val shellIn = java.io.DataInputStream(shell.getInputStream())
             val shellOut = java.io.DataOutputStream(shell.getOutputStream())
             val ready = shellIn.readLine() ?: error("No cellular bridge response")
             check(ready.startsWith("READY")) { "Cellular bridge rejected: $ready" }
-            shell.soTimeout = 0
+            shell.soTimeout = 8_000
 
             // The bridge is not active until the laptop TCP connection and
             // application-level VOR1 handshake have both succeeded.
             val laptop = Socket()
+            ownedLaptop = laptop
             activeLaptopSocket = laptop
             laptop.keepAlive = true
             laptop.tcpNoDelay = true
@@ -262,28 +266,54 @@ object ShellCallAudio {
 
             val running = java.util.concurrent.atomic.AtomicBoolean(true)
             val error = java.util.concurrent.atomic.AtomicReference<Throwable>()
+            val lastRx = java.util.concurrent.atomic.AtomicLong(android.os.SystemClock.elapsedRealtime())
+            val lastTx = java.util.concurrent.atomic.AtomicLong(android.os.SystemClock.elapsedRealtime())
+            // SO_TIMEOUT only covers reads, not blocked TCP writes. Close both
+            // owned sockets if either PCM pump stops completing, even in silence.
+            val watchdog = Thread({
+                try {
+                    while (running.get()) {
+                        Thread.sleep(1000)
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (now - lastRx.get() > 10_000 || now - lastTx.get() > 10_000) {
+                            error.compareAndSet(null, java.io.IOException("PCM pump stalled"))
+                            running.set(false)
+                            runCatching { laptop.close() }
+                            runCatching { shell.close() }
+                        }
+                    }
+                } catch (_: InterruptedException) { /* session finished */ }
+            }, "vorlen-audio-watchdog")
+            watchdog.isDaemon = true
+            watchdog.start()
             val callerToLaptop = Thread({
                 try {
                     while (running.get()) {
                         val n = shellIn.readInt()
-                        if (n <= 0 || n > 192_000) break
+                        if (n <= 0 || n > 192_000 || n % 2 != 0) throw java.io.IOException("Invalid PCM frame: $n")
                         val pcm = ByteArray(n); shellIn.readFully(pcm)
                         synchronized(laptopOut) { laptopOut.writeInt(n); laptopOut.write(pcm); laptopOut.flush() }
+                        lastRx.set(android.os.SystemClock.elapsedRealtime())
                     }
                 } catch (t: Throwable) {
                     if (running.get() || !expectedBridgeClose(t)) {
                         error.set(java.io.IOException("caller_to_laptop: " + (t.message ?: t.javaClass.simpleName), t))
                     }
-                } finally { running.set(false) }
+                } finally {
+                    running.set(false)
+                    runCatching { laptop.close() }
+                    runCatching { shell.close() }
+                }
             }, "vorlen-caller-to-laptop")
             callerToLaptop.start()
 
             try {
                 while (running.get()) {
                     val n = laptopIn.readInt()
-                    if (n <= 0 || n > 192_000) break
+                    if (n <= 0 || n > 192_000 || n % 2 != 0) throw java.io.IOException("Invalid PCM frame: $n")
                     val pcm = ByteArray(n); laptopIn.readFully(pcm)
                     synchronized(shellOut) { shellOut.writeInt(n); shellOut.write(pcm); shellOut.flush() }
+                    lastTx.set(android.os.SystemClock.elapsedRealtime())
                 }
             } catch (t: Throwable) {
                 if (!expectedBridgeClose(t)) {
@@ -291,12 +321,13 @@ object ShellCallAudio {
                 }
             } finally {
                 running.set(false)
-                runCatching { shellOut.writeInt(0); shellOut.flush() }
+                watchdog.interrupt()
                 runCatching { laptop.close() }
                 runCatching { shell.close() }
                 if (activeLaptopSocket === laptop) activeLaptopSocket = null
                 if (activeShellSocket === shell) activeShellSocket = null
                 runCatching { callerToLaptop.join(1500) }
+                runCatching { watchdog.join(1500) }
                 // Samsung can keep the privileged telephony AudioRecord/AudioTrack
                 // endpoints busy for a short period after socket teardown. Give the
                 // daemon handler time to release them before an in-call reconnect.
@@ -304,6 +335,12 @@ object ShellCallAudio {
             }
             error.get()?.let { throw it }
             TestResult(true, "LAPTOP BRIDGE ENDED")
+        }.also {
+            // Includes failures before handshake or before the pump try/finally.
+            runCatching { ownedLaptop?.close() }
+            runCatching { ownedShell?.close() }
+            if (activeLaptopSocket === ownedLaptop) activeLaptopSocket = null
+            if (activeShellSocket === ownedShell) activeShellSocket = null
         }.fold(
             onSuccess = { it },
             onFailure = {
