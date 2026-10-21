@@ -143,11 +143,25 @@ class GatewayService : Service() {
                 }
             }catch(_:InterruptedException){
                 Thread.currentThread().interrupt()
-            }catch(_:Throwable){
-                if(activeRequestId!=null)sendEvent("digital_bridge_failed","exception",activeRequestId)
-                bridgePending=false
+            }catch(t:Throwable){
+                // A bridge worker exception is NOT a cellular hangup. Keep the
+                // same request active and restart the bridge supervisor.
+                if(activeRequestId==bridgeRequestId && sawOffHook){
+                    lastBridgeFailure="supervisor_exception: "+(t.message ?: t.javaClass.simpleName)
+                    bridgePending=true
+                    sendEvent("digital_bridge_reconnect",lastBridgeFailure!!.take(240),bridgeRequestId)
+                }
             }finally{
                 bridgeRunning=false
+                // Run recovery outside this single-thread bridge executor; never
+                // redial, terminate, or complete a cellular call for an audio fault.
+                if(running && sawOffHook && bridgePending && activeRequestId==bridgeRequestId){
+                    cleanupIo.execute {
+                        try { Thread.sleep(2500L) } catch (_:InterruptedException) { return@execute }
+                        if(running && sawOffHook && activeRequestId==bridgeRequestId)
+                            startDigitalBridgeIfConfigured()
+                    }
+                }
             }
         }
     }
